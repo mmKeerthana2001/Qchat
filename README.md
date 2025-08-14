@@ -94,4 +94,4 @@ The frontend is a React application with Shadcn UI components, running on `http:
 - **Notifications**: 10-second toasts in `ChatInput.tsx` for file selection/upload.
 - **Search**: Chat title search in `ChatSidebar.tsx`.
 - **Styling**: Dark theme, glass-card effects, bold white text for selected chats in `ChatSidebar.tsx`.
-<img width="895" height="3436" alt="image" src="https://github.com/user-attachments/assets/f5d03136-e4b8-421e-917c-000e7a3a0211" />
+
