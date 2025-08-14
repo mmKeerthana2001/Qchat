@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-multipart
+starlette
+pydantic
+PyMuPDF
+python-docx
+Pillow
+pytesseract
+motor
+qdrant-client
+sentence-transformers
+python-dotenv
+openai
