@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Live Transcription</title>
+</head>
+<body>
+  <h2>🎤 Live Speech to Text (AWS Transcribe)</h2>
+  <button id="startBtn">Start Transcription</button>
+  <pre id="output"></pre>
+
+  <script>
+    const startBtn = document.getElementById("startBtn");
+    const output = document.getElementById("output");
+
+    startBtn.onclick = async () => {
+      const ws = new WebSocket("ws://localhost:8000/transcribe");
+
+      ws.onmessage = (event) => {
+        output.textContent += event.data + "\n";
+      };
+
+      ws.onopen = async () => {
+        console.log("Connected to WebSocket");
+
+        // Capture microphone
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const audioContext = new AudioContext({ sampleRate: 16000 });
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        processor.onaudioprocess = (e) => {
+          const inputData = e.inputBuffer.getChannelData(0);
+          const pcm16 = convertFloat32ToInt16(inputData);
+          ws.send(pcm16);
+        };
+      };
+
+      ws.onclose = () => console.log("Disconnected");
+    };
+
+    function convertFloat32ToInt16(buffer) {
+      let l = buffer.length;
+      let result = new Int16Array(l);
+      for (let i = 0; i < l; i++) {
+        result[i] = buffer[i] * 0x7fff;
+      }
+      return result.buffer;
+    }
+  </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-# context_manager.py
+
 import uuid
 import asyncio
 import logging
@@ -10,9 +10,9 @@ from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 import os
 import time
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from agent import Agent
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -30,27 +30,23 @@ class ContextManager:
         self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
         logger.info("ContextManager initialized with MongoDB and Qdrant")
 
-    async def create_session(self, session_id: str):
-        """
-        Create a new empty session in MongoDB and Qdrant.
-
-        Parameters:
-        ---------
-        session_id: Unique session ID.
-
-        """
+    async def create_session(self, session_id: str, candidate_name: str, candidate_email: str, share_token: str):
         try:
             collection_name = f"sessions_{session_id}"
             doc_collection = self.db[collection_name]
 
             session_data = {
                 "session_id": session_id,
+                "candidate_name": candidate_name or "Unknown",
+                "candidate_email": candidate_email or "Unknown",
+                "share_token": share_token,
                 "extracted_text": {},
                 "chat_history": [],
+                "initial_message_sent": False,
                 "created_at": time.time()
             }
             await doc_collection.insert_one(session_data)
-            logger.info(f"Created new session in MongoDB: {session_id}")
+            logger.info(f"Created new session in MongoDB: {session_id} for {candidate_name}")
 
             qdrant_collection = f"docs_{session_id}"
             await self.qdrant_client.recreate_collection(
@@ -62,19 +58,87 @@ class ContextManager:
             logger.error(f"Error creating session {session_id}: {str(e)}")
             raise
 
+    async def add_initial_message(self, session_id: str, message: str):
+        try:
+            collection_name = f"sessions_{session_id}"
+            doc_collection = self.db[collection_name]
+            session_data = await doc_collection.find_one({"session_id": session_id})
+            if not session_data:
+                logger.error(f"Session {session_id} not found")
+                raise ValueError(f"Session {session_id} not found")
+
+            history = session_data.get("chat_history", [])
+            history.append({"role": "hr", "query": message, "response": "", "timestamp": time.time()})
+
+            result = await doc_collection.update_one(
+                {"session_id": session_id},
+                {"$set": {"chat_history": history, "initial_message_sent": True, "updated_at": time.time()}}
+            )
+            if result.modified_count == 0:
+                logger.warning(f"No documents updated for session {session_id}")
+            logger.info(f"Added initial message to session {session_id} and set flag")
+        except Exception as e:
+            logger.error(f"Error adding initial message for {session_id}: {str(e)}")
+            raise
+
+    async def get_session(self, session_id: str):
+        try:
+            collection_name = f"sessions_{session_id}"
+            doc_collection = self.db[collection_name]
+            session = await doc_collection.find_one({"session_id": session_id})
+            if not session:
+                logger.error(f"Session {session_id} not found")
+            return session
+        except Exception as e:
+            logger.error(f"Error fetching session {session_id}: {str(e)}")
+            raise
+
+    async def list_sessions(self):
+        try:
+            collections = await self.db.list_collection_names()
+            session_collections = [coll for coll in collections if coll.startswith("sessions_")]
+            sessions = []
+            for collection_name in session_collections:
+                doc_collection = self.db[collection_name]
+                session = await doc_collection.find_one()
+                if session:
+                    try:
+                        sessions.append({
+                            "session_id": session.get("session_id", "Unknown"),
+                            "candidate_name": session.get("candidate_name", "Unknown"),
+                            "candidate_email": session.get("candidate_email", "Unknown"),
+                            "created_at": session.get("created_at", time.time()),
+                            "chat_history": session.get("chat_history", []),
+                            "initial_message_sent": session.get("initial_message_sent", False)
+                        })
+                    except KeyError as e:
+                        logger.error(f"Missing key {e} in session {collection_name}")
+                        continue
+            logger.info(f"Retrieved {len(sessions)} sessions from MongoDB")
+            return sessions
+        except Exception as e:
+            logger.error(f"Error listing sessions: {str(e)}")
+            raise
+
+    async def validate_token(self, token: str) -> str:
+        try:
+            collections = await self.db.list_collection_names()
+            session_collections = [coll for coll in collections if coll.startswith("sessions_")]
+            
+            for collection_name in session_collections:
+                doc_collection = self.db[collection_name]
+                session = await doc_collection.find_one({"share_token": token})
+                if session:
+                    logger.info(f"Found session with token {token} in collection {collection_name}")
+                    return session["session_id"]
+            
+            logger.warning(f"No session found with token {token}")
+            return None
+        except Exception as e:
+            logger.error(f"Error validating token {token}: {str(e)}")
+            raise
+
     def chunk_text(self, text: str, max_chunk_size: int = 500) -> List[str]:
-        """
-        Split text into chunks by newlines with max word limit, or return a single empty chunk.
-
-        Parameters:
-        ---------
-        text: Input text to chunk.
-        max_chunk_size: Maximum number of words per chunk.
-
-        Returns:
-        -------
-        List[str]: List of text chunks, or [""] if text is empty.
-        """
         try:
             if not text.strip():
                 logger.debug("Empty text provided, returning single empty chunk")
@@ -103,19 +167,10 @@ class ContextManager:
             raise
 
     async def store_session_data(self, session_id: str, extracted_text: Dict[str, str]):
-        """
-        Store or update extracted text in MongoDB and embeddings in Qdrant for an existing session.
-
-        Parameters:
-        ---------
-        session_id: Unique session ID.
-        extracted_text: Dictionary mapping filenames to extracted text (can be empty).
-        """
         try:
             collection_name = f"sessions_{session_id}"
             doc_collection = self.db[collection_name]
 
-            # Update extracted text in MongoDB
             await doc_collection.update_one(
                 {"session_id": session_id},
                 {"$set": {"extracted_text": extracted_text, "updated_at": time.time()}}
@@ -123,8 +178,6 @@ class ContextManager:
             logger.info(f"Stored/updated extracted text in MongoDB for session: {session_id}")
 
             qdrant_collection = f"docs_{session_id}"
-
-            # Batch generate embeddings
             points = []
             point_id = 1
             all_chunks = []
@@ -174,54 +227,52 @@ class ContextManager:
             logger.error(f"Error storing session data for {session_id}: {str(e)}")
             raise
 
-    async def process_query(self, session_id: str, query: str) -> Tuple[str, List[Dict[str, str]]]:
-        """
-        Process a user query by retrieving relevant context from MongoDB and Qdrant.
-
-        Parameters:
-        ---------
-        session_id: Unique session ID.
-        query: Current user query.
-
-        Returns:
-        -------
-        tuple: (LLM response, updated chat history)
-        """
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type(Exception),
+        before_sleep=lambda retry_state: logger.warning(
+            f"Retrying process_query for session {retry_state.args[0]} due to {retry_state.outcome.exception()}"
+        )
+    )
+    async def process_query(self, session_id: str, query: str, role: str) -> Tuple[str, List[Dict[str, str]]]:
         try:
-            # Retrieve session data from MongoDB
             collection_name = f"sessions_{session_id}"
             doc_collection = self.db[collection_name]
             session_data = await doc_collection.find_one({"session_id": session_id})
             if not session_data:
                 raise ValueError(f"Session {session_id} not found")
 
-            # Get chat history (last 10 messages)
             history = session_data.get("chat_history", [])[-10:]
-
-            # Generate query embedding
             query_embedding = self.embedder.encode(query, convert_to_numpy=True).tolist()
 
-            # Search Qdrant for relevant document chunks
             qdrant_collection = f"docs_{session_id}"
             search_result = await self.qdrant_client.search(
                 collection_name=qdrant_collection,
                 query_vector=query_embedding,
-                limit=5  # Retrieve top 5 relevant chunks
+                limit=5
             )
 
-            # Combine relevant document chunks
             documents = "\n\n".join(
                 f"File: {hit.payload['filename']}\nChunk: {hit.payload['chunk']}"
                 for hit in search_result
             )
             logger.info(f"Retrieved {len(search_result)} relevant chunks for session {session_id}")
 
-            # Initialize Agent for LLM query
             agent = Agent()
-            response = await agent.process_query(documents, history, query)
+            try:
+                response = await asyncio.wait_for(
+                    agent.process_query(documents, history, query, role),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout while processing query for session {session_id}")
+                raise Exception("Agent processing timed out")
+            except Exception as e:
+                logger.error(f"Agent processing error for session {session_id}: {str(e)}")
+                raise
 
-            # Update chat history in MongoDB
-            history.append({"query": query, "response": response})
+            history.append({"role": role, "query": query, "response": response, "timestamp": time.time()})
             await doc_collection.update_one(
                 {"session_id": session_id},
                 {"$set": {"chat_history": history[-10:], "updated_at": time.time()}}
@@ -234,21 +285,44 @@ class ContextManager:
             logger.error(f"Error processing query for session {session_id}: {str(e)}")
             raise
 
-    async def clear_session(self, session_id: str):
-        """
-        Clear session data from MongoDB and Qdrant.
-
-        Parameters:
-        ---------
-        session_id: Session ID to clear.
-        """
+    async def process_map_query(self, session_id: str, query: str, role: str, map_data: Dict) -> Tuple[str, List[Dict]]:
         try:
-            # Delete MongoDB collection
+            collection_name = f"sessions_{session_id}"
+            doc_collection = self.db[collection_name]
+            session_data = await doc_collection.find_one({"session_id": session_id})
+            if not session_data:
+                raise ValueError(f"Session {session_id} not found")
+
+            history = session_data.get("chat_history", [])[-10:]
+
+            agent = Agent()
+            response = await agent.process_map_query(map_data, query, role)
+
+            history.append({
+                "role": role,
+                "query": query,
+                "response": response,
+                "timestamp": time.time(),
+                "map_data": map_data
+            })
+            await doc_collection.update_one(
+                {"session_id": session_id},
+                {"$set": {"chat_history": history[-10:], "updated_at": time.time()}}
+            )
+            logger.info(f"Updated chat history with map query for session {session_id}")
+
+            return response, history
+
+        except Exception as e:
+            logger.error(f"Error processing map query for session {session_id}: {str(e)}")
+            raise
+
+    async def clear_session(self, session_id: str):
+        try:
             collection_name = f"sessions_{session_id}"
             self.db.drop_collection(collection_name)
             logger.info(f"Cleared MongoDB collection for session {session_id}")
 
-            # Delete Qdrant collection
             qdrant_collection = f"docs_{session_id}"
             self.qdrant_client.delete_collection(qdrant_collection)
             logger.info(f"Cleared Qdrant collection for session {session_id}")
