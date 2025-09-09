@@ -423,8 +423,13 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
         history = session.get("chat_history", [])
         query_corrected = await agent.correct_query(query_req.query, history, query_req.role)
 
-        query_lower = query_corrected.lower().strip()
-        is_map_query = any(keyword in query_lower for keyword in ["address", "nearby", "near", "pgs", "restaurants", "directions", "locations", "where", "offices", "location", "loctaion", "pg", "restruants"])
+        query_lower = query_corrected.lower()
+        is_map_query = any(keyword in query_lower for keyword in [
+            "address", "nearby", "near", "pgs", "restaurants", "directions", 
+            "locations", "where", "all", "offices", "location", "loctaion", 
+            "ocation", "pg", "restruants", "malaysia", "australia", "uk", 
+            "mexico", "canada", "uae"
+        ])
         
         if is_map_query and gmaps:
             try:
@@ -432,14 +437,30 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
                 response, history = await context_manager.process_map_query(session_id, query_corrected, query_req.role, map_data)
             except HTTPException as e:
                 logger.warning(f"Map query failed for session {session_id}: {e.detail}")
-                response = f"Sorry, I couldn't process the location query '{query_corrected}'. {e.detail}"
+                response = f"Sorry, I couldn't find location information for '{query_corrected}'. Please check the spelling or try a different location."
                 history.append({
                     "role": query_req.role,
                     "query": query_corrected,
                     "response": response,
                     "timestamp": time.time()
                 })
-                await context_manager.store_session_data(session_id, {"chat_history": history})
+                await context_manager.store_session_data(session_id, {"extracted_text": {}})  # Store empty extracted_text
+                response_data = {"response": response, "history": history}
+                if query_req.voice_mode and AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
+                    try:
+                        synth_response = polly.synthesize_speech(
+                            Text=response,
+                            OutputFormat='mp3',
+                            VoiceId=AWS_POLLY_VOICE_ID,
+                            Engine='neural'
+                        )
+                        audio_data = synth_response['AudioStream'].read()
+                        response_data['audio_base64'] = base64.b64encode(audio_data).decode('utf-8')
+                        logger.info(f"Generated audio for session {session_id}")
+                    except Exception as e:
+                        logger.error(f"Polly TTS error for session {session_id}: {str(e)}")
+                        response_data['audio_base64'] = None
+                return JSONResponse(content=response_data)
         else:
             session_data = await context_manager.get_session(session_id)
             if not session_data.get("extracted_text"):
@@ -450,7 +471,7 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
                     "response": response,
                     "timestamp": time.time()
                 })
-                await context_manager.store_session_data(session_id, {"chat_history": history})
+                await context_manager.store_session_data(session_id, {"extracted_text": {}})
             else:
                 response, history = await context_manager.process_query(session_id, query_corrected, query_req.role)
         
@@ -498,6 +519,18 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
         logger.error(f"Error processing chat query for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing chat query: {str(e)}")
 
+
+
+# Mapping for country names to specific cities
+country_to_city = {
+    "malaysia": "Kuala Lumpur, Malaysia",
+    "australia": "Lane Cove, Australia",
+    "uk": "Chiswick, UK",
+    "mexico": "Guadalajara, Mexico",
+    "canada": "Surrey, Canada",
+    "uae": "Dubai, UAE"
+}
+
 @app.post("/map-query/{session_id}")
 async def handle_map_query(session_id: str, query_req: QueryRequest):
     try:
@@ -506,7 +539,7 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
         if not is_valid_uuid(session_id):
             raise HTTPException(status_code=400, detail="Invalid session_id format. Must be a valid UUID.")
 
-        query = query_req.query.lower().strip()
+        query = query_req.query.lower()
         map_data = {}
 
         # Hardcoded Quadrant Technologies locations with coordinates
@@ -527,42 +560,112 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
             {"city": "Chiswick, UK", "address": "Gold Building 3 Chiswick Business Park, Chiswick, London, W4 5YA", "lat": 51.4937, "lng": -0.2786}
         ]
 
-        # Fuzzy matching for city names
+        # Extract potential city phrase from query
+        query_words = query.split()
+        potential_city = " ".join(query_words[2:-2]) if len(query_words) > 4 else query  # Extract city between "give me" and "location"
         city_query = None
         city_scores = []
-        for loc in quadrant_locations:
-            city_lower = loc["city"].split(",")[0].lower().strip()
-            score = fuzz.partial_ratio(query, city_lower)
-            city_scores.append((city_lower, score))
-            if score >= 60:  # Use score_cutoff directly in loop for better control
-                city_query = city_lower
+        
+        # Check for country names first
+        for country, city in country_to_city.items():
+            if country in query:
+                city_query = city.lower()
+                city_scores.append((city_query, 100))
                 break
-        logger.info(f"City matching for query '{query}': {city_scores}")
+
+        # If no country match, perform fuzzy matching
+        if not city_query:
+            for loc in quadrant_locations:
+                city_lower = loc["city"].lower()
+                # Use partial_ratio for single-word cities, token_sort_ratio for multi-word
+                score = fuzz.partial_ratio(potential_city, city_lower.split(",")[0]) if "," in city_lower else fuzz.token_sort_ratio(potential_city, city_lower)
+                city_scores.append((city_lower, score))
+            
+            # Select the city with the highest score above threshold
+            if city_scores:
+                best_match = max(city_scores, key=lambda x: x[1])
+                if best_match[1] >= 30:  # Lowered to 30
+                    city_query = best_match[0]
+
+        # Log fuzzy matching scores for debugging
+        logger.info(f"Fuzzy matching scores for query '{query}' with potential city '{potential_city}': {city_scores}")
+
+        # If no valid city match, raise error
+        if not city_query:
+            raise HTTPException(status_code=404, detail=f"No Quadrant Technologies location found for query '{query}'")
+
+        # Find the location
+        location = next((loc for loc in quadrant_locations if loc["city"].lower() == city_query), None)
+        if not location:
+            raise HTTPException(status_code=404, detail=f"Quadrant Technologies location not found for {city_query}")
 
         # Indirect Approach: Handle nearby searches first
         if any(keyword in query for keyword in ["nearby", "near", "pgs", "restaurants", "pg", "restruants"]):
-            if city_query:
-                location = next((loc for loc in quadrant_locations if loc["city"].split(",")[0].lower() == city_query), None)
-                if not location:
-                    logger.error(f"No location found for city_query: {city_query}")
-                    raise HTTPException(status_code=404, detail=f"Quadrant Technologies location not found for {city_query}")
-                keyword = "paying guest, hostel" if any(k in query for k in ["pg", "pgs"]) else "restaurant" if any(k in query for k in ["restaurants", "restruants"]) else None
-                if keyword:
-                    if session_id not in session_storage:
-                        session_storage[session_id] = {"previous_places": [], "next_page_token": None}
-                    
-                    if "more" in query:
-                        session_storage[session_id]["previous_places"] = []
-                    
-                    places = gmaps.places_nearby(
+            keyword = "paying guest, hostel" if any(k in query for k in ["pg", "pgs"]) else "restaurant" if any(k in query for k in ["restaurants", "restruants"]) else None
+            if keyword:
+                if session_id not in session_storage:
+                    session_storage[session_id] = {"previous_places": [], "next_page_token": None}
+                
+                if "more" in query:
+                    session_storage[session_id]["previous_places"] = []
+                
+                places = gmaps.places_nearby(
+                    location={"lat": location["lat"], "lng": location["lng"]},
+                    radius=2000,
+                    keyword=keyword
+                )
+                logger.info(f"Places API returned {len(places['results'])} results for keyword '{keyword}' near {location['city']}")
+                data_list = []
+                seen_place_ids = set(session_storage[session_id]["previous_places"])
+                
+                for place in places['results'][:10]:
+                    place_id = place['place_id']
+                    if place_id not in seen_place_ids:
+                        place_lat, place_lng = place['geometry']['location']['lat'], place['geometry']['location']['lng']
+                        item = {
+                            "name": place['name'],
+                            "address": place.get('vicinity', 'N/A'),
+                            "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
+                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}"
+                        }
+                        data_list.append(item)
+                        seen_place_ids.add(place_id)
+                
+                next_page_token = places.get('next_page_token')
+                if next_page_token and len(data_list) < 10 and "more" in query:
+                    logger.info(f"Fetching more results with next_page_token: {next_page_token}")
+                    time.sleep(2)
+                    more_places = gmaps.places_nearby(
                         location={"lat": location["lat"], "lng": location["lng"]},
                         radius=2000,
+                        keyword=keyword,
+                        page_token=next_page_token
+                    )
+                    logger.info(f"Places API returned {len(more_places['results'])} additional results")
+                    for place in more_places['results'][:10 - len(data_list)]:
+                        place_id = place['place_id']
+                        if place_id not in seen_place_ids:
+                            place_lat, place_lng = place['geometry']['location']['lat'], place['geometry']['location']['lng']
+                            item = {
+                                "name": place['name'],
+                                "address": place.get('vicinity', 'N/A'),
+                                "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
+                                "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}"
+                            }
+                            data_list.append(item)
+                            seen_place_ids.add(place_id)
+                
+                session_storage[session_id]["previous_places"] = list(seen_place_ids)
+                session_storage[session_id]["next_page_token"] = next_page_token if next_page_token else None
+                logger.info(f"Session {session_id} updated: {session_storage[session_id]}")
+                
+                if not data_list:
+                    logger.warning(f"No {keyword} found within 2000m. Trying broader radius (3000m).")
+                    places = gmaps.places_nearby(
+                        location={"lat": location["lat"], "lng": location["lng"]},
+                        radius=3000,
                         keyword=keyword
                     )
-                    logger.info(f"Places API returned {len(places['results'])} results for keyword '{keyword}' near {location['city']}")
-                    data_list = []
-                    seen_place_ids = set(session_storage[session_id]["previous_places"])
-                    
                     for place in places['results'][:10]:
                         place_id = place['place_id']
                         if place_id not in seen_place_ids:
@@ -575,96 +678,27 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                             }
                             data_list.append(item)
                             seen_place_ids.add(place_id)
-                    
-                    next_page_token = places.get('next_page_token')
-                    if next_page_token and len(data_list) < 10 and "more" in query:
-                        logger.info(f"Fetching more results with next_page_token: {next_page_token}")
-                        time.sleep(2)
-                        more_places = gmaps.places_nearby(
-                            location={"lat": location["lat"], "lng": location["lng"]},
-                            radius=2000,
-                            keyword=keyword,
-                            page_token=next_page_token
-                        )
-                        logger.info(f"Places API returned {len(more_places['results'])} additional results")
-                        for place in more_places['results'][:10 - len(data_list)]:
-                            place_id = place['place_id']
-                            if place_id not in seen_place_ids:
-                                place_lat, place_lng = place['geometry']['location']['lat'], place['geometry']['location']['lng']
-                                item = {
-                                    "name": place['name'],
-                                    "address": place.get('vicinity', 'N/A'),
-                                    "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}"
-                                }
-                                data_list.append(item)
-                                seen_place_ids.add(place_id)
-                    
                     session_storage[session_id]["previous_places"] = list(seen_place_ids)
-                    session_storage[session_id]["next_page_token"] = next_page_token if next_page_token else None
-                    logger.info(f"Session {session_id} updated: {session_storage[session_id]}")
-                    
-                    if not data_list:
-                        logger.warning(f"No {keyword} found within 2000m. Trying broader radius (3000m).")
-                        places = gmaps.places_nearby(
-                            location={"lat": location["lat"], "lng": location["lng"]},
-                            radius=3000,
-                            keyword=keyword
-                        )
-                        for place in places['results'][:10]:
-                            place_id = place['place_id']
-                            if place_id not in seen_place_ids:
-                                place_lat, place_lng = place['geometry']['location']['lat'], place['geometry']['location']['lng']
-                                item = {
-                                    "name": place['name'],
-                                    "address": place.get('vicinity', 'N/A'),
-                                    "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}"
-                                }
-                                data_list.append(item)
-                                seen_place_ids.add(place_id)
-                        session_storage[session_id]["previous_places"] = list(seen_place_ids)
-                    
-                    if not data_list:
-                        raise HTTPException(status_code=404, detail=f"No {keyword} found near {location['city']}")
-                    
-                    map_data = {
-                        "type": "nearby",
-                        "data": data_list
-                    }
-                else:
-                    raise HTTPException(status_code=400, detail="Invalid nearby query. Specify 'PGs' or 'restaurants'.")
-            else:
-                raise HTTPException(status_code=400, detail="Please specify a Quadrant Technologies location for nearby search (e.g., Bangalore)")
-
-        # Direct Approach: Handle specific office location queries
-        elif any(keyword in query for keyword in ["quadrant", "location", "address", "office", "loctaion"]) and city_query:
-            # Handle multiple city names in query (e.g., "Chiswick Noida")
-            possible_cities = []
-            for loc in quadrant_locations:
-                city_lower = loc["city"].split(",")[0].lower().strip()
-                score = fuzz.partial_ratio(query, city_lower)
-                if score >= 60:
-                    possible_cities.append((loc, score))
-            
-            if len(possible_cities) > 1:
-                logger.warning(f"Multiple cities matched for query '{query}': {[loc['city'] for loc, _ in possible_cities]}")
-                raise HTTPException(status_code=400, detail=f"Ambiguous query: multiple locations matched ({', '.join(loc['city'] for loc, _ in possible_cities)}). Please specify one location.")
-            
-            location = next((loc for loc, score in possible_cities), None) if possible_cities else None
-            if location:
+                
+                if not data_list:
+                    raise HTTPException(status_code=404, detail=f"No {keyword} found near {location['city']}")
+                
                 map_data = {
-                    "type": "address",
-                    "city": location["city"],
-                    "data": location["address"],
-                    "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(location['address'])}",
-                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={location['lat']},{location['lng']}&zoom=15&size=150x112&markers=color:red|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                    "type": "nearby",
+                    "data": data_list
                 }
-                logger.info(f"Single location query matched: {location['city']} with score {score}")
             else:
-                logger.error(f"No location found for city_query: {city_query}")
-                raise HTTPException(status_code=404, detail=f"Quadrant Technologies location not found for {city_query}")
-
+                raise HTTPException(status_code=400, detail="Invalid nearby query. Specify 'PGs' or 'restaurants'.")
+        # Direct Approach: Handle specific office location queries
+        elif any(keyword in query for keyword in ["quadrant", "location", "address", "office", "loctaion", "ocation"]) and city_query:
+            map_data = {
+                "type": "address",
+                "city": location["city"],
+                "data": location["address"],
+                "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(location['address'])}",
+                "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={location['lat']},{location['lng']}&zoom=15&size=150x112&markers=color:red|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}"
+            }
+            logger.info(f"Single location query matched: {location['city']}")
         # Direct Approach: Handle all office locations query
         elif any(keyword in query for keyword in ["locations", "where", "all", "offices"]) and "quadrant" in query:
             data_list = []
@@ -680,12 +714,11 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                 "type": "multi_location",
                 "data": data_list
             }
-
         # Handle directions
         elif "directions to quadrant technologies" in query:
             destination = None
             if city_query:
-                destination = next((loc for loc in quadrant_locations if loc["city"].split(",")[0].lower() == city_query), None)
+                destination = next((loc for loc in quadrant_locations if loc["city"].lower() == city_query), None)
             origin = query.split("from")[-1].strip() if "from" in query else None
             if destination or not city_query:
                 destination_addr = destination["address"] if destination else "Quadrant Technologies"
@@ -713,7 +746,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                 raise HTTPException(status_code=404, detail="Quadrant Technologies location not found")
 
         else:
-            logger.error(f"Query not recognized as map-related: {query}")
             raise HTTPException(status_code=400, detail="Not a map-related query")
 
         return map_data

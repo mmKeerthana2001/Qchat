@@ -1,4 +1,3 @@
-
 import uuid
 import asyncio
 import logging
@@ -138,11 +137,20 @@ class ContextManager:
             logger.error(f"Error validating token {token}: {str(e)}")
             raise
 
-    def chunk_text(self, text: str, max_chunk_size: int = 500) -> List[str]:
+    def chunk_text(self, text: str | List, max_chunk_size: int = 500) -> List[str]:
         try:
+            # Handle non-string input
+            if isinstance(text, list):
+                logger.warning(f"Received list instead of string in chunk_text: {text}")
+                text = " ".join(str(item) for item in text if item)  # Convert list to string
+            if not isinstance(text, str):
+                logger.error(f"Invalid text type: {type(text)}. Converting to empty string.")
+                text = ""
+
             if not text.strip():
                 logger.debug("Empty text provided, returning single empty chunk")
                 return [""]
+
             lines = text.split("\n")
             lines = [line.strip() for line in lines if line.strip()]
             chunks = []
@@ -171,9 +179,21 @@ class ContextManager:
             collection_name = f"sessions_{session_id}"
             doc_collection = self.db[collection_name]
 
+            # Ensure extracted_text values are strings
+            sanitized_extracted_text = {}
+            for filename, text in extracted_text.items():
+                if isinstance(text, list):
+                    logger.warning(f"Converting list to string for filename {filename}: {text}")
+                    sanitized_extracted_text[filename] = " ".join(str(item) for item in text if item)
+                elif isinstance(text, str):
+                    sanitized_extracted_text[filename] = text
+                else:
+                    logger.warning(f"Invalid text type for filename {filename}: {type(text)}. Using empty string.")
+                    sanitized_extracted_text[filename] = ""
+
             await doc_collection.update_one(
                 {"session_id": session_id},
-                {"$set": {"extracted_text": extracted_text, "updated_at": time.time()}}
+                {"$set": {"extracted_text": sanitized_extracted_text, "updated_at": time.time()}}
             )
             logger.info(f"Stored/updated extracted text in MongoDB for session: {session_id}")
 
@@ -182,7 +202,7 @@ class ContextManager:
             point_id = 1
             all_chunks = []
             chunk_metadata = []
-            for filename, text in extracted_text.items():
+            for filename, text in sanitized_extracted_text.items():
                 chunks = self.chunk_text(text)
                 all_chunks.extend(chunks)
                 chunk_metadata.extend([(filename, chunk) for chunk in chunks])
@@ -211,7 +231,7 @@ class ContextManager:
                     point_id += 1
             else:
                 logger.info(f"No non-empty chunks to embed for session {session_id}, storing empty data")
-                for filename in extracted_text.keys():
+                for filename in sanitized_extracted_text.keys():
                     points.append(PointStruct(
                         id=point_id,
                         vector=[0.0] * 384,
