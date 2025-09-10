@@ -428,7 +428,7 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
             "address", "nearby", "near", "pgs", "restaurants", "directions", 
             "locations", "where", "all", "offices", "location", "loctaion", 
             "ocation", "pg", "restruants", "malaysia", "australia", "uk", 
-            "mexico", "canada", "uae"
+            "mexico", "canada", "uae", "ladies pg", "gents pg", "ladies pgs", "gents pgs"
         ])
         
         if is_map_query and gmaps:
@@ -544,7 +544,7 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
 
         # Hardcoded Quadrant Technologies locations with coordinates
         quadrant_locations = [
-            {"city": "Redmond, WA", "address": "5020, 148th Ave NE Ste 250, Redmond, WA, 98052", "lat": 47.6456, "lng": -122.1419},
+            {"city": "US, Redmond, WA", "address": "5020, 148th Ave NE Ste 250, Redmond, WA, 98052", "lat": 47.6456, "lng": -122.1419},
             {"city": "Iselin, NJ", "address": "33 S Wood Ave, Suite 600, Iselin, New Jersey, 08830", "lat": 40.5754, "lng": -74.3282},
             {"city": "Dallas, TX", "address": "3333 Lee Pkwy #600, Dallas, Texas, 75219", "lat": 32.8085, "lng": -96.8035},
             {"city": "Hyderabad, Telangana", "address": "4th floor, Building No.21, Raheja Mindspace, Sy No. 64 (Part), Madhapur, Hyderabad, Telangana, 500081", "lat": 17.4416, "lng": 78.3804},
@@ -560,48 +560,72 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
             {"city": "Chiswick, UK", "address": "Gold Building 3 Chiswick Business Park, Chiswick, London, W4 5YA", "lat": 51.4937, "lng": -0.2786}
         ]
 
-        # Extract potential city phrase from query
-        query_words = query.split()
-        potential_city = " ".join(query_words[2:-2]) if len(query_words) > 4 else query  # Extract city between "give me" and "location"
+        # Clean query by removing common words
+        stop_words = ["can", "i", "know", "all", "quadrant", "technologies", "location", "locations", "address", "office", "loctaion", "ocation"]
+        cleaned_query = " ".join(word for word in query.split() if word not in stop_words)
+
+        # Check for multi-location query first
+        if any(keyword in query for keyword in ["locations", "where", "all", "offices"]) and "quadrant" in query:
+            data_list = []
+            for loc in quadrant_locations:
+                item = {
+                    "city": loc["city"],
+                    "address": loc["address"],
+                    "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc['address'])}",
+                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={loc['lat']},{loc['lng']}&zoom=15&size=150x112&markers=color:red|{loc['lat']},{loc['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                }
+                data_list.append(item)
+            map_data = {
+                "type": "multi_location",
+                "data": data_list
+            }
+            logger.info(f"Multi-location query matched: returning all {len(data_list)} Quadrant Technologies locations")
+            return map_data
+
+        # Extract potential city name
         city_query = None
         city_scores = []
         
-        # Check for country names first
+        # Check for country names
         for country, city in country_to_city.items():
             if country in query:
                 city_query = city.lower()
                 city_scores.append((city_query, 100))
                 break
 
-        # If no country match, perform fuzzy matching
-        if not city_query:
+        # Perform fuzzy matching for single-location queries
+        if not city_query and not any(keyword in query for keyword in ["locations", "where", "all", "offices"]):
             for loc in quadrant_locations:
                 city_lower = loc["city"].lower()
-                # Use partial_ratio for single-word cities, token_sort_ratio for multi-word
-                score = fuzz.partial_ratio(potential_city, city_lower.split(",")[0]) if "," in city_lower else fuzz.token_sort_ratio(potential_city, city_lower)
+                score = fuzz.partial_ratio(cleaned_query, city_lower.split(",")[0]) if "," in city_lower else fuzz.partial_ratio(cleaned_query, city_lower)
                 city_scores.append((city_lower, score))
             
             # Select the city with the highest score above threshold
             if city_scores:
                 best_match = max(city_scores, key=lambda x: x[1])
-                if best_match[1] >= 30:  # Lowered to 30
+                if best_match[1] >= 50:  # Lowered to 50
                     city_query = best_match[0]
 
-        # Log fuzzy matching scores for debugging
-        logger.info(f"Fuzzy matching scores for query '{query}' with potential city '{potential_city}': {city_scores}")
+        # Log fuzzy matching scores
+        logger.info(f"Fuzzy matching scores for query '{query}' (cleaned: '{cleaned_query}'): {city_scores}")
 
-        # If no valid city match, raise error
-        if not city_query:
+        # If no valid city match for single-location query, raise error
+        if not city_query and any(keyword in query for keyword in ["quadrant", "location", "address", "office", "loctaion", "ocation", "where"]):
             raise HTTPException(status_code=404, detail=f"No Quadrant Technologies location found for query '{query}'")
 
-        # Find the location
-        location = next((loc for loc in quadrant_locations if loc["city"].lower() == city_query), None)
-        if not location:
-            raise HTTPException(status_code=404, detail=f"Quadrant Technologies location not found for {city_query}")
+        # Find the location for single-location queries
+        if city_query:
+            location = next((loc for loc in quadrant_locations if loc["city"].lower() == city_query), None)
+            if not location:
+                location = next((loc for loc in quadrant_locations if loc["city"].split(",")[0].lower() == city_query.split(",")[0].lower()), None)
+                if not location:
+                    raise HTTPException(status_code=404, detail=f"Quadrant Technologies location not found for {city_query}")
 
-        # Indirect Approach: Handle nearby searches first
-        if any(keyword in query for keyword in ["nearby", "near", "pgs", "restaurants", "pg", "restruants"]):
-            keyword = "paying guest, hostel" if any(k in query for k in ["pg", "pgs"]) else "restaurant" if any(k in query for k in ["restaurants", "restruants"]) else None
+        # Handle nearby searches
+        if any(keyword in query for keyword in ["nearby", "near", "pgs", "ladies pg", "gents pg", "ladies pgs", "gents pgs", "restaurants", "pg", "restruants"]):
+            if not city_query:
+                raise HTTPException(status_code=400, detail="Please specify a valid city for nearby search")
+            keyword = "paying guest, hostel" if any(k in query for k in ["pg", "pgs", "ladies pg", "gents pg", "ladies pgs", "gents pgs"]) else "restaurant" if any(k in query for k in ["restaurants", "restruants"]) else None
             if keyword:
                 if session_id not in session_storage:
                     session_storage[session_id] = {"previous_places": [], "next_page_token": None}
@@ -689,8 +713,8 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                 }
             else:
                 raise HTTPException(status_code=400, detail="Invalid nearby query. Specify 'PGs' or 'restaurants'.")
-        # Direct Approach: Handle specific office location queries
-        elif any(keyword in query for keyword in ["quadrant", "location", "address", "office", "loctaion", "ocation"]) and city_query:
+        # Handle specific office location queries
+        elif city_query and any(keyword in query for keyword in ["quadrant", "location", "address", "office", "loctaion", "ocation"]):
             map_data = {
                 "type": "address",
                 "city": location["city"],
@@ -699,21 +723,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                 "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={location['lat']},{location['lng']}&zoom=15&size=150x112&markers=color:red|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}"
             }
             logger.info(f"Single location query matched: {location['city']}")
-        # Direct Approach: Handle all office locations query
-        elif any(keyword in query for keyword in ["locations", "where", "all", "offices"]) and "quadrant" in query:
-            data_list = []
-            for loc in quadrant_locations:
-                item = {
-                    "city": loc["city"],
-                    "address": loc["address"],
-                    "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc['address'])}",
-                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={loc['lat']},{loc['lng']}&zoom=15&size=150x112&markers=color:red|{loc['lat']},{loc['lng']}&key={GOOGLE_MAPS_API_KEY}"
-                }
-                data_list.append(item)
-            map_data = {
-                "type": "multi_location",
-                "data": data_list
-            }
         # Handle directions
         elif "directions to quadrant technologies" in query:
             destination = None
@@ -744,7 +753,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                     raise HTTPException(status_code=400, detail="Please specify an origin for directions")
             else:
                 raise HTTPException(status_code=404, detail="Quadrant Technologies location not found")
-
         else:
             raise HTTPException(status_code=400, detail="Not a map-related query")
 
