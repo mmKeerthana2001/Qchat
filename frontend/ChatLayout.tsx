@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react"
 import { ChatSidebar } from "@/components/layout/ChatSidebar"
 import { ChatHeader } from "@/components/layout/ChatHeader"
@@ -8,6 +7,7 @@ import { UploadedFilesPanel } from "@/components/layout/UploadedFilesPanel"
 import { toast } from "@/components/ui/sonner"
 import { useNavigate, useLocation } from "react-router-dom"
 import { Button } from "@/components/ui/button"
+import { Mic } from "lucide-react" // Added import for Mic icon
 
 interface Chat {
   id: string;
@@ -18,12 +18,20 @@ interface Chat {
   candidate_email: string;
 }
 
+interface MapData {
+  type: "address" | "nearby" | "directions" | "multi_location";
+  data: string | { name: string; address: string; map_url?: string; static_map_url?: string }[] | string[] | { city: string; address: string; map_url?: string; static_map_url?: string }[];
+  map_url?: string;
+  static_map_url?: string;
+}
+
 interface Message {
   id: string;
   role: "user" | "assistant" | "system" | "hr" | "candidate";
   content: string;
   timestamp: Date;
   audio_base64?: string;
+  map_data?: MapData;
 }
 
 interface UploadedFile {
@@ -41,6 +49,7 @@ export function ChatLayout() {
   const [hrEmail, setHrEmail] = useState<string | null>(null)
   const [candidateName, setCandidateName] = useState("")
   const [candidateEmail, setCandidateEmail] = useState("")
+  const [isVoiceMode, setIsVoiceMode] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -70,8 +79,8 @@ export function ChatLayout() {
     const sessionIdFromUrl = params.get("session_id")
     if (sessionIdFromUrl) {
       console.log("New session ID from URL:", sessionIdFromUrl)
-      localStorage.setItem("session_id", sessionIdFromUrl) // Update localStorage with new session ID
-      navigate("/chat", { replace: true }) // Remove session_id from URL
+      localStorage.setItem("session_id", sessionIdFromUrl)
+      navigate("/chat", { replace: true })
     } else if (!localStorage.getItem("session_id")) {
       toast.error("No session found. Please log in.", { duration: 10000 })
       navigate("/")
@@ -201,7 +210,13 @@ export function ChatLayout() {
               role: msg.role,
               content: msg.query || msg.response,
               timestamp: new Date(msg.timestamp * 1000),
-              audio_base64: msg.audio_base64
+              audio_base64: msg.audio_base64,
+              map_data: msg.map_data ? {
+                type: msg.map_data.type,
+                data: msg.map_data.data,
+                map_url: msg.map_data.map_url,
+                static_map_url: msg.map_data.static_map_url
+              } : undefined
             }))
             setMessages(fetchedMessages)
           }
@@ -241,50 +256,95 @@ export function ChatLayout() {
       const ws = new WebSocket(`ws://localhost:8000/ws/${selectedSession}`)
       setWebsocket(ws)
 
-      ws.onopen = () => console.log("WebSocket connected for session:", selectedSession)
+      ws.onopen = () => {
+        console.log("WebSocket connected for session:", selectedSession)
+        ws.send(JSON.stringify({ type: "ping" }))
+      }
+
       ws.onmessage = async (event) => {
-        const data = JSON.parse(event.data)
-        if (data.type === "file_uploaded") {
-          setUploadedFiles(prev => {
-            const newFile = { filename: data.filename, path: data.path }
-            const isDuplicate = prev.some(file => file.filename === newFile.filename && file.path === newFile.path)
-            if (isDuplicate) return prev
-            return [...prev, newFile]
-          })
-          toast.info(`File uploaded: ${data.filename}`, { duration: 5000 })
-        } else {
-          setMessages(prev => {
-            const newMessage = {
-              id: crypto.randomUUID(),
-              role: data.role,
-              content: data.content,
-              timestamp: new Date(data.timestamp * 1000),
-              audio_base64: data.audio_base64
-            }
-            const isDuplicate = prev.some(
-              msg =>
-                msg.role === newMessage.role &&
-                msg.content === newMessage.content &&
-                Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 1000
-            )
-            if (isDuplicate) {
-              console.log("Duplicate WebSocket message ignored:", data)
-              return prev
-            }
-            return [...prev, newMessage]
-          })
-          toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 })
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === "pong") {
+            console.log("Received pong, WebSocket alive")
+            return
+          }
+          if (data.type === "file_uploaded") {
+            setUploadedFiles(prev => {
+              const newFile = { filename: data.filename, path: data.path }
+              const isDuplicate = prev.some(file => file.filename === newFile.filename && file.path === newFile.path)
+              if (isDuplicate) return prev
+              return [...prev, newFile]
+            })
+            toast.info(`File uploaded: ${data.filename}`, { duration: 5000 })
+          } else {
+            setMessages(prev => {
+              const newMessage: Message = {
+                id: crypto.randomUUID(),
+                role: data.role,
+                content: data.content,
+                timestamp: new Date(data.timestamp * 1000),
+                audio_base64: data.audio_base64,
+                map_data: data.map_data ? {
+                  type: data.map_data.type,
+                  data: data.map_data.data,
+                  map_url: data.map_data.map_url,
+                  static_map_url: data.map_data.static_map_url
+                } : undefined
+              }
+              const isDuplicate = prev.some(
+                msg =>
+                  msg.role === newMessage.role &&
+                  msg.content === newMessage.content &&
+                  Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 1000
+              )
+              if (isDuplicate) {
+                console.log("Duplicate WebSocket message ignored:", data)
+                return prev
+              }
+              return [...prev, newMessage]
+            })
+            toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 })
+          }
+        } catch (error) {
+          console.error("Error parsing WebSocket message:", error)
+          toast.error("Failed to process incoming message", { duration: 5000 })
         }
       }
-      ws.onclose = () => console.log("WebSocket closed for session:", selectedSession)
-      ws.onerror = () => toast.error("WebSocket error", { duration: 10000 })
+
+      ws.onclose = () => {
+        console.log("WebSocket closed for session:", selectedSession)
+        toast.warning("WebSocket connection closed", { duration: 10000 })
+      }
+
+      ws.onerror = (error) => {
+        console.error("WebSocket error:", error)
+        toast.error("WebSocket connection error", { duration: 10000 })
+      }
+
+      // Ping every 30 seconds to keep connection alive
+      const pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "ping" }))
+          console.log("Sent ping to keep WebSocket alive")
+        }
+      }, 30000)
 
       return () => {
         ws.close()
+        clearInterval(pingInterval)
         setWebsocket(null)
       }
     }
   }, [selectedSession, navigate])
+
+  useEffect(() => {
+    // Auto-play audio for assistant messages in voice mode
+    const lastMessage = messages[messages.length - 1]
+    if (isVoiceMode && lastMessage?.role === "assistant" && lastMessage.audio_base64) {
+      const audio = new Audio(`data:audio/mp3;base64,${lastMessage.audio_base64}`)
+      audio.play().catch(() => toast.error("Audio playback failed.", { duration: 10000 }))
+    }
+  }, [messages, isVoiceMode])
 
   const addMessage = (sessionId: string, message: Message) => {
     if (sessionId === selectedSession) {
@@ -316,11 +376,48 @@ export function ChatLayout() {
       <div className="flex flex-col flex-1">
         <div className="flex justify-between items-center p-4 border-b">
           <ChatHeader />
-          <Button variant="outline" onClick={handleLogout}>
-            Logout
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={isVoiceMode ? "default" : "ghost"}
+              onClick={() => setIsVoiceMode(!isVoiceMode)}
+              className="flex items-center gap-2"
+            >
+              <Mic className="h-4 w-4" />
+              <span className="hidden sm:inline">Voice</span>
+            </Button>
+            <Button variant="outline" onClick={handleLogout}>
+              Logout
+            </Button>
+          </div>
         </div>
-        <ChatMessages messages={messages} role="hr" />
+        <ChatMessages
+          thinkDeepMode={false}
+          messages={messages}
+          isVoiceMode={isVoiceMode}
+          isRecording={false}
+          liveTranscript=""
+          role="hr"
+          onSuggestedQuestionClick={(question) => {
+            const message: Message = {
+              id: crypto.randomUUID(),
+              role: "hr",
+              content: question,
+              timestamp: new Date()
+            }
+            addMessage(selectedSession || "", message)
+            fetch(`http://localhost:8000/chat/${selectedSession}`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...getSessionHeaders()
+              },
+              body: JSON.stringify({ query: question, role: "hr", voice_mode: isVoiceMode })
+            }).catch(error => {
+              console.error("Error sending suggested question:", error)
+              toast.error(`Failed to send question: ${error instanceof Error ? error.message : String(error)}`, { duration: 10000 })
+            })
+          }}
+        />
         <ChatInput
           sessionId={selectedSession}
           addMessage={addMessage}

@@ -1,4 +1,3 @@
-
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -13,14 +12,15 @@ import {
   User,
   Sparkles,
   Mic as MicIcon,
-  MapPin
+  MapPin,
+  Star
 } from "lucide-react"
 import { toast } from "@/components/ui/sonner"
 import { useEffect } from "react"
 
 interface MapData {
   type: "address" | "nearby" | "directions" | "multi_location"
-  data: string | { name: string; address: string; map_url?: string; static_map_url?: string }[] | string[] | { city: string; address: string; map_url?: string; static_map_url?: string }[]
+  data: string | { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[] | string[] | { city: string; address: string; map_url?: string; static_map_url?: string }[]
   map_url?: string
   static_map_url?: string
 }
@@ -62,118 +62,183 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
   ]
 
   const renderMapData = (mapData: MapData) => {
-  // Helper function to extract city from address if mapData.city is undefined
-  const getCityFromAddress = (address: string): string => {
-    const parts = address.split(",");
-    return parts.length > 2 ? parts[parts.length - 2].trim() : "Location";
-  };
+    // Helper function to extract city from address if mapData.city is undefined
+    const getCityFromAddress = (address: string): string => {
+      const parts = address.split(",");
+      return parts.length > 2 ? parts[parts.length - 2].trim() : "Location";
+    };
 
-  switch (mapData.type) {
-    case "address":
-      return (
-        <div className="mt-2 p-3 bg-muted rounded-lg">
-          <div className="flex items-center gap-2 mb-1">
-            <MapPin className="h-4 w-4 text-primary" />
-            <span className="font-semibold text-sm">Address</span>
+    // Helper function to render star rating
+    const renderStars = (rating: number | string | undefined) => {
+      if (!rating || rating === 'N/A') return null;
+      const ratingNum = typeof rating === 'string' ? parseFloat(rating) : rating;
+      if (isNaN(ratingNum)) return null;
+
+      const fullStars = Math.floor(ratingNum);
+      const hasHalfStar = ratingNum % 1 >= 0.3;
+      const stars = [];
+
+      for (let i = 0; i < 5; i++) {
+        if (i < fullStars) {
+          stars.push(<Star key={i} className="h-4 w-4 text-yellow-500" fill="currentColor" />);
+        } else if (i === fullStars && hasHalfStar) {
+          stars.push(
+            <Star key={i} className="h-4 w-4 text-yellow-500" style={{ clipPath: 'inset(0 50% 0 0)' }} fill="currentColor" />
+          );
+        } else {
+          stars.push(<Star key={i} className="h-4 w-4 text-gray-300" />);
+        }
+      }
+      return stars;
+    };
+
+    // Helper function to format price level
+    const formatPriceLevel = (priceLevel: string | undefined) => {
+      if (!priceLevel || priceLevel === 'N/A') return null;
+      const priceMap: { [key: string]: string } = {
+        'Free': 'Free',
+        'Inexpensive': '$',
+        'Moderate': '$$',
+        'Expensive': '$$$',
+        'Very Expensive': '$$$$',
+        '$': '$',
+        '$$': '$$',
+        '$$$': '$$$',
+        '$$$$': '$$$$'
+      };
+      return priceMap[priceLevel] || priceLevel;
+    };
+
+    switch (mapData.type) {
+      case "address":
+        return (
+          <div className="mt-2 p-3 bg-muted rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <MapPin className="h-4 w-4 text-primary" />
+              <span className="font-semibold text-sm">Address</span>
+            </div>
+            <div className="flex flex-row items-start gap-4">
+              {mapData.static_map_url && mapData.map_url && (
+                <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                  <img
+                    src={mapData.static_map_url}
+                    alt="Location Map"
+                    className="rounded-lg w-[150px] h-auto"
+                  />
+                </a>
+              )}
+              <div className="flex-grow">
+                <p className="text-sm font-medium mb-1">
+                  {mapData.city || getCityFromAddress(mapData.data as string)}
+                </p>
+                <p className="text-sm">{mapData.data as string}</p>
+              </div>
+            </div>
           </div>
-          <p className="text-sm font-medium mb-1">
-            {mapData.city || getCityFromAddress(mapData.data as string)}
-          </p>
-          <p className="text-sm mb-1">{mapData.data as string}</p>
-          {mapData.static_map_url && mapData.map_url && (
-            <a href={mapData.map_url} target="_blank" rel="noopener noreferrer">
-              <img
-                src={mapData.static_map_url}
-                alt="Location Map"
-                className="mt-2 rounded-lg w-full max-w-[150px]"
-              />
-            </a>
-          )}
-        </div>
-      )
-    case "nearby":
-      return (
-        <div className="mt-2 p-3 bg-muted rounded-lg">
-          <div className="flex items-center gap-2 mb-1">
-            <MapPin className="h-4 w-4 text-primary" />
-            <span className="font-semibold text-sm">Nearby Places</span>
+        )
+      case "nearby":
+        return (
+          <div className="mt-2 p-3 bg-muted rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <MapPin className="h-4 w-4 text-primary" />
+              <span className="font-semibold text-sm">Nearby Places</span>
+            </div>
+            <ul className="space-y-4">
+              {(mapData.data as { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[]).map(
+                (place, index) => (
+                  <li key={index} className="flex flex-row items-start gap-4">
+                    {place.static_map_url && place.map_url && (
+                      <a href={place.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                        <img
+                          src={place.static_map_url}
+                          alt={`${place.name} Map`}
+                          className="rounded-lg w-[150px] h-auto"
+                        />
+                      </a>
+                    )}
+                    <div className="flex-grow">
+                      <span className="font-medium block text-sm mb-1">{place.name}</span>
+                      <p className="text-sm mb-1">{place.address}</p>
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        {renderStars(place.rating)}
+                        {place.rating && place.rating !== 'N/A' && (
+                          <span>{typeof place.rating === 'number' ? place.rating.toFixed(1) : place.rating} ({place.total_reviews || 0} reviews)</span>
+                        )}
+                        {place.type && place.type !== 'N/A' && (
+                          <span className="before:content-['•'] before:mx-2 capitalize">{place.type}</span>
+                        )}
+                        {formatPriceLevel(place.price_level) && (
+                          <span className="before:content-['•'] before:mx-2">{formatPriceLevel(place.price_level)}</span>
+                        )}
+                      </div>
+                    </div>
+                  </li>
+                )
+              )}
+            </ul>
           </div>
-          <ul className="list-disc pl-5 text-sm">
-            {(mapData.data as { name: string; address: string; map_url?: string; static_map_url?: string }[]).map(
-              (place, index) => (
-                <li key={index} className="mb-3">
-                  <span className="font-medium block mb-1">{place.name}</span>
-                  <p className="text-sm mb-1">{place.address}</p>
-                  {place.static_map_url && place.map_url && (
-                    <a href={place.map_url} target="_blank" rel="noopener noreferrer">
-                      <img
-                        src={place.static_map_url}
-                        alt={`${place.name} Map`}
-                        className="mt-1 rounded-lg w-full max-w-[150px]"
-                      />
-                    </a>
-                  )}
-                </li>
-              )
-            )}
-          </ul>
-        </div>
-      )
-    case "directions":
-      return (
-        <div className="mt-2 p-3 bg-muted rounded-lg">
-          <div className="flex items-center gap-2 mb-1">
-            <MapPin className="h-4 w-4 text-primary" />
-            <span className="font-semibold text-sm">Directions</span>
+        )
+      case "directions":
+        return (
+          <div className="mt-2 p-3 bg-muted rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <MapPin className="h-4 w-4 text-primary" />
+              <span className="font-semibold text-sm">Directions</span>
+            </div>
+            <div className="flex flex-row items-start gap-4">
+              {mapData.static_map_url && mapData.map_url && (
+                <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                  <img
+                    src={mapData.static_map_url}
+                    alt="Directions Map"
+                    className="rounded-lg w-[150px] h-auto"
+                  />
+                </a>
+              )}
+              <div className="flex-grow">
+                <ol className="list-decimal pl-5 text-sm space-y-2">
+                  {(mapData.data as string[]).map((step, index) => (
+                    <li key={index} dangerouslySetInnerHTML={{ __html: step }} className="text-sm" />
+                  ))}
+                </ol>
+              </div>
+            </div>
           </div>
-          <ol className="list-decimal pl-5 text-sm">
-            {(mapData.data as string[]).map((step, index) => (
-              <li key={index} dangerouslySetInnerHTML={{ __html: step }} />
-            ))}
-          </ol>
-          {mapData.static_map_url && mapData.map_url && (
-            <a href={mapData.map_url} target="_blank" rel="noopener noreferrer">
-              <img
-                src={mapData.static_map_url}
-                alt="Directions Map"
-                className="mt-2 rounded-lg w-full max-w-[150px]"
-              />
-            </a>
-          )}
-        </div>
-      )
-    case "multi_location":
-      return (
-        <div className="mt-2 p-3 bg-muted rounded-lg">
-          <div className="flex items-center gap-2 mb-1">
-            <MapPin className="h-4 w-4 text-primary" />
-            <span className="font-semibold text-sm">Office Locations</span>
+        )
+      case "multi_location":
+        return (
+          <div className="mt-2 p-3 bg-muted rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <MapPin className="h-4 w-4 text-primary" />
+              <span className="font-semibold text-sm">Office Locations</span>
+            </div>
+            <ul className="space-y-4">
+              {(mapData.data as { city: string; address: string; map_url?: string; static_map_url?: string }[]).map(
+                (loc, index) => (
+                  <li key={index} className="flex flex-row items-start gap-4">
+                    {loc.static_map_url && loc.map_url && (
+                      <a href={loc.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                        <img
+                          src={loc.static_map_url}
+                          alt={`${loc.city} Map`}
+                          className="rounded-lg w-[150px] h-auto"
+                        />
+                      </a>
+                    )}
+                    <div className="flex-grow">
+                      <span className="font-medium block text-sm mb-1">{loc.city}</span>
+                      <p className="text-sm">{loc.address}</p>
+                    </div>
+                  </li>
+                )
+              )}
+            </ul>
           </div>
-          <ul className="list-disc pl-5 text-sm">
-            {(mapData.data as { city: string; address: string; map_url?: string; static_map_url?: string }[]).map(
-              (loc, index) => (
-                <li key={index} className="mb-3">
-                  <span className="font-medium block mb-1">{loc.city}</span>
-                  <p className="text-sm mb-1">{loc.address}</p>
-                  {loc.static_map_url && loc.map_url && (
-                    <a href={loc.map_url} target="_blank" rel="noopener noreferrer">
-                      <img
-                        src={loc.static_map_url}
-                        alt={`${loc.city} Map`}
-                        className="mt-1 rounded-lg w-full max-w-[150px]"
-                      />
-                    </a>
-                  )}
-                </li>
-              )
-            )}
-          </ul>
-        </div>
-      )
-    default:
-      return null
+        )
+      default:
+        return null
+    }
   }
-}
 
   useEffect(() => {
     const lastMessage = messages[messages.length - 1]
