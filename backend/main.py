@@ -1,4 +1,3 @@
-
 import os
 import asyncio
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, WebSocket, WebSocketDisconnect, Depends
@@ -519,8 +518,6 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
         logger.error(f"Error processing chat query for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing chat query: {str(e)}")
 
-
-
 # Mapping for country names to specific cities
 country_to_city = {
     "malaysia": "Kuala Lumpur, Malaysia",
@@ -572,7 +569,7 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                     "city": loc["city"],
                     "address": loc["address"],
                     "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc['address'])}",
-                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={loc['lat']},{loc['lng']}&zoom=15&size=150x112&markers=color:red|{loc['lat']},{loc['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={loc['lat']},{loc['lng']}&zoom=15&size=150x112&markers=label:Q|color:purple|{loc['lat']},{loc['lng']}&key={GOOGLE_MAPS_API_KEY}"
                 }
                 data_list.append(item)
             map_data = {
@@ -646,11 +643,20 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                     place_id = place['place_id']
                     if place_id not in seen_place_ids:
                         place_lat, place_lng = place['geometry']['location']['lat'], place['geometry']['location']['lng']
+                        # Map price_level to dollar signs
+                        price_level = place.get('price_level')
+                        price_level_display = ''.join(['$'] * price_level) if price_level is not None else 'N/A'
+                        # Get primary type
+                        place_type = place.get('types', [])[0].replace('_', ' ').title() if place.get('types') else 'N/A'
                         item = {
                             "name": place['name'],
                             "address": place.get('vicinity', 'N/A'),
                             "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}"
+                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}|label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}",
+                            "rating": place.get('rating', 'N/A'),
+                            "total_reviews": place.get('user_ratings_total', 0),
+                            "type": place_type,
+                            "price_level": price_level_display
                         }
                         data_list.append(item)
                         seen_place_ids.add(place_id)
@@ -670,11 +676,18 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                         place_id = place['place_id']
                         if place_id not in seen_place_ids:
                             place_lat, place_lng = place['geometry']['location']['lat'], place['geometry']['location']['lng']
+                            price_level = place.get('price_level')
+                            price_level_display = ''.join(['$'] * price_level) if price_level is not None else 'N/A'
+                            place_type = place.get('types', [])[0].replace('_', ' ').title() if place.get('types') else 'N/A'
                             item = {
                                 "name": place['name'],
                                 "address": place.get('vicinity', 'N/A'),
                                 "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                                "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}"
+                                "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}|label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}",
+                                "rating": place.get('rating', 'N/A'),
+                                "total_reviews": place.get('user_ratings_total', 0),
+                                "type": place_type,
+                                "price_level": price_level_display
                             }
                             data_list.append(item)
                             seen_place_ids.add(place_id)
@@ -694,11 +707,18 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                         place_id = place['place_id']
                         if place_id not in seen_place_ids:
                             place_lat, place_lng = place['geometry']['location']['lat'], place['geometry']['location']['lng']
+                            price_level = place.get('price_level')
+                            price_level_display = ''.join(['$'] * price_level) if price_level is not None else 'N/A'
+                            place_type = place.get('types', [])[0].replace('_', ' ').title() if place.get('types') else 'N/A'
                             item = {
                                 "name": place['name'],
                                 "address": place.get('vicinity', 'N/A'),
                                 "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                                "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}"
+                                "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}|label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}",
+                                "rating": place.get('rating', 'N/A'),
+                                "total_reviews": place.get('user_ratings_total', 0),
+                                "type": place_type,
+                                "price_level": price_level_display
                             }
                             data_list.append(item)
                             seen_place_ids.add(place_id)
@@ -720,7 +740,7 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                 "city": location["city"],
                 "data": location["address"],
                 "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(location['address'])}",
-                "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={location['lat']},{location['lng']}&zoom=15&size=150x112&markers=color:red|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={location['lat']},{location['lng']}&zoom=15&size=150x112&markers=label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}"
             }
             logger.info(f"Single location query matched: {location['city']}")
         # Handle directions
@@ -740,7 +760,9 @@ async def handle_map_query(session_id: str, query_req: QueryRequest):
                         dest_addr = legs['end_address']
                         encoded_polyline = directions[0]['overview_polyline']['points']
                         map_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origin_addr)}&destination={urllib.parse.quote(dest_addr)}&travelmode=driving"
-                        static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?size=150x112&path=enc:{urllib.parse.quote(encoded_polyline)}&key={GOOGLE_MAPS_API_KEY}"
+                        dest_lat = destination['lat'] if destination else legs['end_location']['lat']
+                        dest_lng = destination['lng'] if destination else legs['end_location']['lng']
+                        static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?size=150x112&path=enc:{urllib.parse.quote(encoded_polyline)}&markers=label:Q|color:purple|{dest_lat},{dest_lng}&key={GOOGLE_MAPS_API_KEY}"
                         map_data = {
                             "type": "directions",
                             "data": steps,
