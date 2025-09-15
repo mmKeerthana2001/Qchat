@@ -35,7 +35,7 @@ class Agent:
             "Kuala Lumpur, Malaysia", "Singapore", "Chiswick, UK"
         ]
         self.common_terms = ["restaurants", "restaurant", "pgs", "pg", "nearby", "near", "address", "locations", "offices"]
-
+    
     async def correct_query(self, query: str, history: list, role: str) -> str:
         try:
             query_lower = query.lower()
@@ -155,3 +155,83 @@ class Agent:
         except Exception as e:
             logger.error(f"Error processing map query: {e}")
             raise
+
+    async def classify_intent_and_extract(self, query: str, history: list, role: str) -> dict:
+        """
+        Classifies the query intent and extracts key entities using GPT-4o.
+        First determines if the query is 'map' or 'non_map', then for map queries, classifies
+        into 'single_location', 'multi_location', 'nearby', or 'directions'.
+        Returns a dict with 'is_map' (bool), 'intent' (e.g., 'single_location'), and extracted params like 'city', 'nearby_type', 'origin'.
+        """
+        try:
+            corrected_query = await self.correct_query(query, history, role)
+            prompt = (
+                "You are an intent classifier for a chat app focused on Quadrant Technologies locations and document-based queries. "
+                f"Analyze the query in the context of interacting with {'HR' if role == 'hr' else 'candidate'}. "
+                "Step 1: Determine if the query is map-related ('map') or not ('non_map'). "
+                "Map-related queries involve locations, addresses, nearby amenities, or directions related to 'Quadrant Technologies'. "
+                "Step 2: If map-related, classify the intent into one of: "
+                "'single_location' (ask for specific office address/city), "
+                "'multi_location' (ask for all offices or multiple cities), "
+                "'nearby' (ask for amenities like PGs/restaurants near an office), "
+                "'directions' (ask for directions to/from an office). "
+                "Extract entities: city (exact match from known: " + ", ".join(self.quadrant_cities) + "), "
+                "nearby_type (e.g., 'ladies pgs', 'gents pgs', 'restaurants', or infer from query like 'hotels', 'cafes'), "
+                "origin (starting point for directions, e.g., 'from airport'). "
+                "If city is implied (e.g., 'nearby PGs in Hyderabad' implies Quadrant Hyderabad), use it. "
+                "For 'nearby', always use Quadrant office as the source address. "
+                "Output ONLY a valid JSON object. Examples: "
+                "{'is_map': true, 'intent': 'single_location', 'city': 'Bengaluru, Karnataka', 'nearby_type': null, 'origin': null} "
+                "or {'is_map': false, 'intent': 'non_map', 'city': null, 'nearby_type': null, 'origin': null}"
+            )
+            prompt += f"\n\nConversation History:\n"
+            for msg in history[-5:]:  # Limit to recent history for context
+                prompt += f"{msg['role'].capitalize()}: {msg['query']}\nAssistant: {msg['response']}\n"
+            prompt += f"\nQuery: {corrected_query}\nJSON Output:"
+
+            response = await self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a JSON-only responder. Output only a valid JSON object with keys: is_map (bool), intent (string), city (string or null), nearby_type (string or null), origin (string or null). No extra text."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=200,
+                temperature=0.1,  # Even lower for consistency
+                response_format={"type": "json_object"}  # Enforce JSON schema
+            )
+            raw_content = response.choices[0].message.content.strip()
+            logger.info(f"Raw GPT response for intent classification: '{raw_content}'")  # Debug log
+            
+            import json
+            intent_data = json.loads(raw_content)
+            logger.info(f"Intent classification for '{corrected_query}': {intent_data}")
+            return intent_data
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error in intent classification (raw: '{raw_content if 'raw_content' in locals() else 'N/A'}'): {e}")
+            
+            # Fallback: Keyword-based detection for map queries
+            query_lower = corrected_query.lower()
+            map_keywords = ["where is", "address", "location", "nearby", "near", "pgs", "pg", "restaurants", "directions", "offices", "locations"]
+            cities_lower = [city.lower() for city in self.quadrant_cities]
+            is_map_fallback = any(kw in query_lower for kw in map_keywords) or any(city in query_lower for city in cities_lower)
+            
+            if is_map_fallback:
+                # Simple extraction for fallback
+                intent_data = {"is_map": True, "intent": "single_location", "city": None, "nearby_type": None, "origin": None}
+                # Try to extract city with fuzzy
+                for city in self.quadrant_cities:
+                    if fuzz.partial_ratio(query_lower, city.lower()) >= 80:
+                        intent_data["city"] = city
+                        intent_data["intent"] = "single_location"
+                        break
+                if any(kw in query_lower for kw in ["pgs", "pg", "restaurants"]):
+                    intent_data["intent"] = "nearby"
+                    intent_data["nearby_type"] = "paying guest, hostel" if "pg" in query_lower else "restaurant"
+            else:
+                intent_data = {"is_map": False, "intent": "non_map", "city": None, "nearby_type": None, "origin": None}
+            
+            logger.info(f"Fallback intent for '{corrected_query}': {intent_data}")
+            return intent_data
+        except Exception as e:
+            logger.error(f"Error in intent classification: {e}")
+            return {"is_map": False, "intent": "non_map", "city": None, "nearby_type": None, "origin": None}

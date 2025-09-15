@@ -305,7 +305,7 @@ class ContextManager:
             logger.error(f"Error processing query for session {session_id}: {str(e)}")
             raise
 
-    async def process_map_query(self, session_id: str, query: str, role: str, map_data: Dict) -> Tuple[str, List[Dict]]:
+    async def process_map_query(self, session_id: str, query: str, role: str, map_data: Dict, intent_data: dict = None) -> Tuple[str, List[Dict]]:
         try:
             collection_name = f"sessions_{session_id}"
             doc_collection = self.db[collection_name]
@@ -323,7 +323,8 @@ class ContextManager:
                 "query": query,
                 "response": response,
                 "timestamp": time.time(),
-                "map_data": map_data
+                "map_data": map_data,
+                "intent_data": intent_data  # Store intent_data
             })
             await doc_collection.update_one(
                 {"session_id": session_id},
@@ -332,7 +333,6 @@ class ContextManager:
             logger.info(f"Updated chat history with map query for session {session_id}")
 
             return response, history
-
         except Exception as e:
             logger.error(f"Error processing map query for session {session_id}: {str(e)}")
             raise
