@@ -12,7 +12,6 @@ interface MapData {
   data: string | { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[] | string[] | { city: string; address: string; map_url?: string; static_map_url?: string }[]
   map_url?: string
   static_map_url?: string
-  coordinates?: { lat: number; lng: number; label: string; color?: string }[]
 }
 
 interface Message {
@@ -39,7 +38,6 @@ function CandidateChat() {
   const [stream, setStream] = useState<MediaStream | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<HTMLDivElement>(null)
 
   const suggestedQuestions = [
     "What is the salary range for this position?",
@@ -52,48 +50,6 @@ function CandidateChat() {
     "Directions to Quadrant Technologies from New York",
     "Where are all the Quadrant Technologies offices located?"
   ]
-
-  // Load Google Maps API script dynamically
-  useEffect(() => {
-    const loadGoogleMapsScript = () => {
-      if (window.google?.maps) return // Script already loaded
-
-      const script = document.createElement("script")
-      script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyBfdwifhc_fFYHempQVUOqR7AW8C8ynsI4&libraries=places`
-      script.async = true
-      script.defer = true
-      script.onload = () => console.log("Google Maps API loaded")
-      script.onerror = () => toast.error("Failed to load Google Maps API", { duration: 10000 })
-      document.head.appendChild(script)
-    }
-    loadGoogleMapsScript()
-  }, [])
-
-  // Initialize map for nearby queries
-  useEffect(() => {
-    const lastMessage = messages[messages.length - 1]
-    if (lastMessage?.map_data?.type === "nearby" && lastMessage.map_data.coordinates && mapRef.current && window.google?.maps) {
-      const coordinates = lastMessage.map_data.coordinates
-      const centerLat = coordinates.reduce((sum, coord) => sum + coord.lat, 0) / coordinates.length
-      const centerLng = coordinates.reduce((sum, coord) => sum + coord.lng, 0) / coordinates.length
-
-      const map = new window.google.maps.Map(mapRef.current, {
-        zoom: 13,
-        center: { lat: centerLat, lng: centerLng },
-      })
-
-      coordinates.forEach((coord, index) => {
-        new window.google.maps.Marker({
-          position: { lat: coord.lat, lng: coord.lng },
-          map,
-          title: coord.label,
-          icon: {
-            url: `http://maps.google.com/mapfiles/ms/icons/${coord.color || 'red'}-dot.png`
-          }
-        })
-      })
-    }
-  }, [messages])
 
   useEffect(() => {
     const token = searchParams.get("token")
@@ -113,6 +69,7 @@ function CandidateChat() {
 
   useEffect(() => {
     if (sessionId) {
+      // Fetch initial messages
       fetch(`http://localhost:8000/messages/${sessionId}`)
         .then(res => res.json())
         .then(data => {
@@ -122,12 +79,11 @@ function CandidateChat() {
             content: msg.query || msg.response,
             timestamp: new Date(msg.timestamp * 1000),
             audio_base64: msg.audio_base64,
-            map_data: msg.map_data ? {
-              type: msg.map_data.type,
-              data: msg.map_data.data,
-              map_url: msg.map_data.map_url,
-              static_map_url: msg.map_data.static_map_url,
-              coordinates: msg.map_data.coordinates
+            map_data: msg.map_data ? { 
+              type: msg.map_data.type, 
+              data: msg.map_data.data, 
+              map_url: msg.map_data.map_url, 
+              static_map_url: msg.map_data.static_map_url 
             } : undefined
           }))
           setMessages(fetchedMessages)
@@ -137,11 +93,13 @@ function CandidateChat() {
           toast.error("Failed to load messages", { duration: 10000 })
         })
 
+      // Set up WebSocket
       const ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`)
       setWebsocket(ws)
 
       ws.onopen = () => {
         console.log("WebSocket connected for candidate session:", sessionId)
+        // Send initial ping to keep connection alive
         ws.send(JSON.stringify({ type: "ping" }))
       }
 
@@ -158,15 +116,15 @@ function CandidateChat() {
             content: data.content,
             timestamp: new Date(data.timestamp * 1000),
             audio_base64: data.audio_base64,
-            map_data: data.map_data ? {
-              type: data.map_data.type,
-              data: data.map_data.data,
-              map_url: data.map_data.map_url,
-              static_map_url: data.map_data.static_map_url,
-              coordinates: data.map_data.coordinates
+            map_data: data.map_data ? { 
+              type: data.map_data.type, 
+              data: data.map_data.data, 
+              map_url: data.map_data.map_url, 
+              static_map_url: data.map_data.static_map_url 
             } : undefined
           }
           setMessages(prev => {
+            // Relaxed duplicate checking to avoid missing messages
             const isDuplicate = prev.some(
               msg =>
                 msg.role === newMessage.role &&
@@ -196,6 +154,7 @@ function CandidateChat() {
         toast.error("WebSocket connection error", { duration: 10000 })
       }
 
+      // Ping every 30 seconds to keep connection alive
       const pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "ping" }))
@@ -212,6 +171,7 @@ function CandidateChat() {
   }, [sessionId])
 
   useEffect(() => {
+    // Auto-scroll to bottom when messages change
     if (scrollAreaRef.current) {
       const scrollElement = scrollAreaRef.current.querySelector(".scrollarea-viewport")
       if (scrollElement) {
@@ -257,15 +217,15 @@ function CandidateChat() {
       ws.onopen = async () => {
         console.log("Transcription WebSocket connected")
         try {
-          const mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              sampleRate: 16000,
-              sampleSize: 16,
+          const mediaStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: { 
+              sampleRate: 16000, 
+              sampleSize: 16, 
               channelCount: 1,
               echoCancellation: true,
               noiseSuppression: true,
               autoGainControl: true
-            }
+            } 
           })
           setStream(mediaStream)
           const ctx = new AudioContext({ sampleRate: 16000 })
@@ -422,7 +382,7 @@ function CandidateChat() {
       }
     } catch (error) {
       console.error("Error sending message:", error)
-      toast.error(`Failed to process request: ${error instanceof Error ? err.message : String(error)}`, { duration: 10000 })
+      toast.error(`Failed to process request: ${error instanceof Error ? error.message : String(error)}`, { duration: 10000 })
     } finally {
       setIsLoading(false)
     }
@@ -456,36 +416,40 @@ function CandidateChat() {
   }
 
   const renderMapData = (mapData: MapData) => {
+    // Helper function to extract city from address if mapData.city is undefined
     const getCityFromAddress = (address: string): string => {
-      const parts = address.split(",")
-      return parts.length > 2 ? parts[parts.length - 2].trim() : "Location"
-    }
+      const parts = address.split(",");
+      // City is typically the second-to-last or third-to-last part in address
+      return parts.length > 2 ? parts[parts.length - 2].trim() : "Location";
+    };
 
+    // Helper function to render star rating
     const renderStars = (rating: number | string | undefined) => {
-      if (!rating || rating === 'N/A') return null
-      const ratingNum = typeof rating === 'string' ? parseFloat(rating) : rating
-      if (isNaN(ratingNum)) return null
+      if (!rating || rating === 'N/A') return null;
+      const ratingNum = typeof rating === 'string' ? parseFloat(rating) : rating;
+      if (isNaN(ratingNum)) return null;
 
-      const fullStars = Math.floor(ratingNum)
-      const hasHalfStar = ratingNum % 1 >= 0.3
-      const stars = []
+      const fullStars = Math.floor(ratingNum);
+      const hasHalfStar = ratingNum % 1 >= 0.3;
+      const stars = [];
 
       for (let i = 0; i < 5; i++) {
         if (i < fullStars) {
-          stars.push(<Star key={i} className="h-4 w-4 text-yellow-500" fill="currentColor" />)
+          stars.push(<Star key={i} className="h-4 w-4 text-yellow-500" fill="currentColor" />);
         } else if (i === fullStars && hasHalfStar) {
           stars.push(
             <Star key={i} className="h-4 w-4 text-yellow-500" style={{ clipPath: 'inset(0 50% 0 0)' }} fill="currentColor" />
-          )
+          );
         } else {
-          stars.push(<Star key={i} className="h-4 w-4 text-gray-300" />)
+          stars.push(<Star key={i} className="h-4 w-4 text-gray-300" />);
         }
       }
-      return stars
-    }
+      return stars;
+    };
 
+    // Helper function to format price level
     const formatPriceLevel = (priceLevel: string | undefined) => {
-      if (!priceLevel || priceLevel === 'N/A') return null
+      if (!priceLevel || priceLevel === 'N/A') return null;
       const priceMap: { [key: string]: string } = {
         'Free': 'Free',
         'Inexpensive': '$',
@@ -496,9 +460,9 @@ function CandidateChat() {
         '$$': '$$',
         '$$$': '$$$',
         '$$$$': '$$$$'
-      }
-      return priceMap[priceLevel] || priceLevel
-    }
+      };
+      return priceMap[priceLevel] || priceLevel;
+    };
 
     switch (mapData.type) {
       case "address":
@@ -509,8 +473,8 @@ function CandidateChat() {
               <span className="font-semibold text-sm">Address</span>
             </div>
             <div className="flex flex-row items-start gap-4">
-              {mapData.static_map_url && (
-                <a href={mapData.map_url || '#'} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+              {mapData.static_map_url && mapData.map_url && (
+                <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
                   <img
                     src={mapData.static_map_url}
                     alt="Location Map"
@@ -523,11 +487,6 @@ function CandidateChat() {
                   {mapData.city || getCityFromAddress(mapData.data as string)}
                 </p>
                 <p className="text-sm">{mapData.data as string}</p>
-                {mapData.map_url && (
-                  <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline">
-                    View on Google Maps
-                  </a>
-                )}
               </div>
             </div>
           </div>
@@ -539,24 +498,12 @@ function CandidateChat() {
               <MapPin className="h-4 w-4 text-primary" />
               <span className="font-semibold text-sm">Nearby Places</span>
             </div>
-            <div className="mb-4">
-              <div
-                ref={mapRef}
-                className="w-full h-[300px] rounded-lg"
-                style={{ display: mapData.coordinates ? 'block' : 'none' }}
-              ></div>
-              {mapData.map_url && (
-                <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline mt-2 block">
-                  View on Google Maps
-                </a>
-              )}
-            </div>
             <ul className="space-y-4">
               {(mapData.data as { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[]).map(
                 (place, index) => (
                   <li key={index} className="flex flex-row items-start gap-4">
-                    {place.static_map_url && (
-                      <a href={place.map_url || '#'} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                    {place.static_map_url && place.map_url && (
+                      <a href={place.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
                         <img
                           src={place.static_map_url}
                           alt={`${place.name} Map`}
@@ -579,11 +526,6 @@ function CandidateChat() {
                           <span className="before:content-['•'] before:mx-2">{formatPriceLevel(place.price_level)}</span>
                         )}
                       </div>
-                      {place.map_url && (
-                        <a href={place.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline">
-                          View on Google Maps
-                        </a>
-                      )}
                     </div>
                   </li>
                 )
@@ -599,8 +541,8 @@ function CandidateChat() {
               <span className="font-semibold text-sm">Directions</span>
             </div>
             <div className="flex flex-row items-start gap-4">
-              {mapData.static_map_url && (
-                <a href={mapData.map_url || '#'} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+              {mapData.static_map_url && mapData.map_url && (
+                <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
                   <img
                     src={mapData.static_map_url}
                     alt="Directions Map"
@@ -614,11 +556,6 @@ function CandidateChat() {
                     <li key={index} dangerouslySetInnerHTML={{ __html: step }} className="text-sm" />
                   ))}
                 </ol>
-                {mapData.map_url && (
-                  <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline">
-                    View Directions on Google Maps
-                  </a>
-                )}
               </div>
             </div>
           </div>
@@ -634,8 +571,8 @@ function CandidateChat() {
               {(mapData.data as { city: string; address: string; map_url?: string; static_map_url?: string }[]).map(
                 (loc, index) => (
                   <li key={index} className="flex flex-row items-start gap-4">
-                    {loc.static_map_url && (
-                      <a href={loc.map_url || '#'} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                    {loc.static_map_url && loc.map_url && (
+                      <a href={loc.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
                         <img
                           src={loc.static_map_url}
                           alt={`${loc.city} Map`}
@@ -646,11 +583,6 @@ function CandidateChat() {
                     <div className="flex-grow">
                       <span className="font-medium block text-sm mb-1">{loc.city}</span>
                       <p className="text-sm">{loc.address}</p>
-                      {loc.map_url && (
-                        <a href={loc.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline">
-                          View on Google Maps
-                        </a>
-                      )}
                     </div>
                   </li>
                 )
