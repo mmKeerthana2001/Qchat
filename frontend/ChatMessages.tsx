@@ -1,50 +1,65 @@
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { 
-  Copy, 
-  RefreshCw, 
-  Edit3, 
-  Share, 
-  ThumbsUp, 
-  ThumbsDown,
-  Bot,
-  User,
-  Sparkles,
-  Mic as MicIcon,
-  MapPin,
-  Star
-} from "lucide-react"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Copy, RefreshCw, Edit3, Share, ThumbsUp, ThumbsDown, Bot, User, Sparkles, Mic as MicIcon, MapPin, Star } from "lucide-react"
 import { toast } from "@/components/ui/sonner"
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 
 interface MapData {
   type: "address" | "nearby" | "directions" | "multi_location"
   data: string | { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[] | string[] | { city: string; address: string; map_url?: string; static_map_url?: string }[]
   map_url?: string
   static_map_url?: string
+  coordinates?: { lat: number; lng: number; label: string; color?: string }[]
 }
 
 interface Message {
-  id: string;
-  role: "user" | "assistant" | "system" | "hr" | "candidate";
-  content: string;
-  timestamp: Date;
-  audio_base64?: string;
-  map_data?: MapData;
+  id: string
+  role: "user" | "assistant" | "system" | "hr" | "candidate"
+  content: string
+  timestamp: Date
+  audio_base64?: string
+  map_data?: MapData
 }
 
 interface ChatMessagesProps {
-  thinkDeepMode: boolean;
-  messages: Message[];
-  isVoiceMode: boolean;
-  isRecording: boolean;
-  liveTranscript: string;
-  role: "hr" | "candidate";
-  onSuggestedQuestionClick?: (question: string) => void;
+  thinkDeepMode: boolean
+  messages: Message[]
+  isVoiceMode: boolean
+  isRecording: boolean
+  liveTranscript: string
+  role: "hr" | "candidate"
+  onSuggestedQuestionClick?: (question: string) => void
 }
 
 export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording, liveTranscript, role, onSuggestedQuestionClick }: ChatMessagesProps) {
+  const mapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1]
+    if (lastMessage?.map_data?.type === "nearby" && lastMessage.map_data.coordinates && mapRef.current && window.google?.maps) {
+      const coordinates = lastMessage.map_data.coordinates
+      const centerLat = coordinates.reduce((sum, coord) => sum + coord.lat, 0) / coordinates.length
+      const centerLng = coordinates.reduce((sum, coord) => sum + coord.lng, 0) / coordinates.length
+
+      const map = new window.google.maps.Map(mapRef.current, {
+        zoom: 13,
+        center: { lat: centerLat, lng: centerLng },
+      })
+
+      coordinates.forEach((coord) => {
+        new window.google.maps.Marker({
+          position: { lat: coord.lat, lng: coord.lng },
+          map,
+          title: coord.label,
+          icon: {
+            url: `http://maps.google.com/mapfiles/ms/icons/${coord.color || 'red'}-dot.png`
+          }
+        })
+      })
+    }
+  }, [messages])
+
   const formatTime = (date: Date) => {
     return new Intl.DateTimeFormat('en-US', {
       hour: 'numeric',
@@ -62,39 +77,38 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
   ]
 
   const renderMapData = (mapData: MapData) => {
-    // Helper function to extract city from address if mapData.city is undefined
+    console.log("Rendering mapData:", mapData)
+
     const getCityFromAddress = (address: string): string => {
-      const parts = address.split(",");
-      return parts.length > 2 ? parts[parts.length - 2].trim() : "Location";
-    };
+      const parts = address.split(",")
+      return parts.length > 2 ? parts[parts.length - 2].trim() : "Location"
+    }
 
-    // Helper function to render star rating
     const renderStars = (rating: number | string | undefined) => {
-      if (!rating || rating === 'N/A') return null;
-      const ratingNum = typeof rating === 'string' ? parseFloat(rating) : rating;
-      if (isNaN(ratingNum)) return null;
+      if (!rating || rating === 'N/A') return null
+      const ratingNum = typeof rating === 'string' ? parseFloat(rating) : rating
+      if (isNaN(ratingNum)) return null
 
-      const fullStars = Math.floor(ratingNum);
-      const hasHalfStar = ratingNum % 1 >= 0.3;
-      const stars = [];
+      const fullStars = Math.floor(ratingNum)
+      const hasHalfStar = ratingNum % 1 >= 0.3
+      const stars = []
 
       for (let i = 0; i < 5; i++) {
         if (i < fullStars) {
-          stars.push(<Star key={i} className="h-4 w-4 text-yellow-500" fill="currentColor" />);
+          stars.push(<Star key={i} className="h-4 w-4 text-yellow-500" fill="currentColor" />)
         } else if (i === fullStars && hasHalfStar) {
           stars.push(
             <Star key={i} className="h-4 w-4 text-yellow-500" style={{ clipPath: 'inset(0 50% 0 0)' }} fill="currentColor" />
-          );
+          )
         } else {
-          stars.push(<Star key={i} className="h-4 w-4 text-gray-300" />);
+          stars.push(<Star key={i} className="h-4 w-4 text-gray-300" />)
         }
       }
-      return stars;
-    };
+      return stars
+    }
 
-    // Helper function to format price level
     const formatPriceLevel = (priceLevel: string | undefined) => {
-      if (!priceLevel || priceLevel === 'N/A') return null;
+      if (!priceLevel || priceLevel === 'N/A') return null
       const priceMap: { [key: string]: string } = {
         'Free': 'Free',
         'Inexpensive': '$',
@@ -105,9 +119,9 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
         '$$': '$$',
         '$$$': '$$$',
         '$$$$': '$$$$'
-      };
-      return priceMap[priceLevel] || priceLevel;
-    };
+      }
+      return priceMap[priceLevel] || priceLevel
+    }
 
     switch (mapData.type) {
       case "address":
@@ -118,12 +132,13 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
               <span className="font-semibold text-sm">Address</span>
             </div>
             <div className="flex flex-row items-start gap-4">
-              {mapData.static_map_url && mapData.map_url && (
-                <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+              {mapData.static_map_url && (
+                <a href={mapData.map_url || '#'} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
                   <img
                     src={mapData.static_map_url}
                     alt="Location Map"
                     className="rounded-lg w-[150px] h-auto"
+                    onError={() => console.error("Failed to load map image:", mapData.static_map_url)}
                   />
                 </a>
               )}
@@ -132,6 +147,11 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
                   {mapData.city || getCityFromAddress(mapData.data as string)}
                 </p>
                 <p className="text-sm">{mapData.data as string}</p>
+                {mapData.map_url && (
+                  <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline">
+                    View on Google Maps
+                  </a>
+                )}
               </div>
             </div>
           </div>
@@ -143,12 +163,24 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
               <MapPin className="h-4 w-4 text-primary" />
               <span className="font-semibold text-sm">Nearby Places</span>
             </div>
+            <div className="mb-4">
+              <div
+                ref={mapRef}
+                className="w-full h-[300px] rounded-lg"
+                style={{ display: mapData.coordinates ? 'block' : 'none' }}
+              ></div>
+              {mapData.map_url && (
+                <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline mt-2 block">
+                  View on Google Maps
+                </a>
+              )}
+            </div>
             <ul className="space-y-4">
               {(mapData.data as { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[]).map(
                 (place, index) => (
                   <li key={index} className="flex flex-row items-start gap-4">
-                    {place.static_map_url && place.map_url && (
-                      <a href={place.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                    {place.static_map_url && (
+                      <a href={place.map_url || '#'} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
                         <img
                           src={place.static_map_url}
                           alt={`${place.name} Map`}
@@ -171,6 +203,11 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
                           <span className="before:content-['•'] before:mx-2">{formatPriceLevel(place.price_level)}</span>
                         )}
                       </div>
+                      {place.map_url && (
+                        <a href={place.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline">
+                          View on Google Maps
+                        </a>
+                      )}
                     </div>
                   </li>
                 )
@@ -186,12 +223,13 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
               <span className="font-semibold text-sm">Directions</span>
             </div>
             <div className="flex flex-row items-start gap-4">
-              {mapData.static_map_url && mapData.map_url && (
-                <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+              {mapData.static_map_url && (
+                <a href={mapData.map_url || '#'} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
                   <img
                     src={mapData.static_map_url}
                     alt="Directions Map"
                     className="rounded-lg w-[150px] h-auto"
+                    onError={() => console.error("Failed to load map image:", mapData.static_map_url)}
                   />
                 </a>
               )}
@@ -201,6 +239,11 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
                     <li key={index} dangerouslySetInnerHTML={{ __html: step }} className="text-sm" />
                   ))}
                 </ol>
+                {mapData.map_url && (
+                  <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline">
+                    View Directions on Google Maps
+                  </a>
+                )}
               </div>
             </div>
           </div>
@@ -216,18 +259,24 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
               {(mapData.data as { city: string; address: string; map_url?: string; static_map_url?: string }[]).map(
                 (loc, index) => (
                   <li key={index} className="flex flex-row items-start gap-4">
-                    {loc.static_map_url && loc.map_url && (
-                      <a href={loc.map_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                    {loc.static_map_url && (
+                      <a href={loc.map_url || '#'} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
                         <img
                           src={loc.static_map_url}
                           alt={`${loc.city} Map`}
                           className="rounded-lg w-[150px] h-auto"
+                          onError={() => console.error("Failed to load map image:", loc.static_map_url)}
                         />
                       </a>
                     )}
                     <div className="flex-grow">
                       <span className="font-medium block text-sm mb-1">{loc.city}</span>
                       <p className="text-sm">{loc.address}</p>
+                      {loc.map_url && (
+                        <a href={loc.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline">
+                          View on Google Maps
+                        </a>
+                      )}
                     </div>
                   </li>
                 )
@@ -239,14 +288,6 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
         return null
     }
   }
-
-  useEffect(() => {
-    const lastMessage = messages[messages.length - 1]
-    if (isVoiceMode && lastMessage?.role === "assistant" && lastMessage.audio_base64) {
-      const audio = new Audio(`data:audio/mp3;base64,${lastMessage.audio_base64}`)
-      audio.play().catch(() => toast.error("Audio playback failed.", { duration: 10000 }))
-    }
-  }, [messages, isVoiceMode])
 
   return (
     <ScrollArea className="h-full px-4 py-6">
@@ -316,7 +357,6 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
                         {message.map_data && renderMapData(message.map_data)}
                       </div>
                     </div>
-                    
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-muted-foreground">
                         {formatTime(message.timestamp)}
