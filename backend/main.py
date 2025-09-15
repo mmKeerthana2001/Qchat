@@ -529,22 +529,7 @@ country_to_city = {
     "canada": "Surrey, Canada",
     "uae": "Dubai, UAE"
 }
-quadrant_locations = [
-    {"city": "US, Redmond, WA", "address": "5020, 148th Ave NE Ste 250, Redmond, WA, 98052", "lat": 47.6456, "lng": -122.1419},
-    {"city": "Iselin, NJ", "address": "33 S Wood Ave, Suite 600, Iselin, New Jersey, 08830", "lat": 40.5754, "lng": -74.3282},
-    {"city": "Dallas, TX", "address": "3333 Lee Pkwy #600, Dallas, Texas, 75219", "lat": 32.8085, "lng": -96.8035},
-    {"city": "Hyderabad, Telangana", "address": "4th floor, Building No.21, Raheja Mindspace, Sy No. 64 (Part), Madhapur, Hyderabad, Telangana, 500081", "lat": 17.4416, "lng": 78.3804},
-    {"city": "Bengaluru, Karnataka", "address": "Office No. 106, #1, Navarathna garden, Doddakallasandra Kanakpura Road, Bengaluru, Karnataka, 560062", "lat": 12.8797, "lng": 77.5407},
-    {"city": "Warangal, Telangana", "address": "IT - SEZ, Madikonda, Warangal, Telangana, 506009", "lat": 17.9475, "lng": 79.5781},
-    {"city": "Noida, Uttar Pradesh", "address": "Worcoz, A-24, 1st Floor, Sector 63, Noida, Uttar Pradesh, 201301", "lat": 28.6270, "lng": 77.3727},
-    {"city": "Guadalajara, Mexico", "address": "Amado Nervo 785, Guadalajara, Jalisco, 44656", "lat": 20.6720, "lng": -103.3668},
-    {"city": "Surrey, Canada", "address": "7404 King George Blvd, Suite 200, Surrey, British Columbia, V3W 1N6", "lat": 49.1372, "lng": -122.8457},
-    {"city": "Dubai, UAE", "address": "The Meydan Hotel, Grandstand, 6th floor, Meydan Road, Dubai, Nad Al Sheba", "lat": 25.1560, "lng": 55.2964},
-    {"city": "Lane Cove, Australia", "address": "24 Birdwood Lane, Lane Cove, New South Wales", "lat": -33.8144, "lng": 151.1693},
-    {"city": "Kuala Lumpur, Malaysia", "address": "19A-24-3, Level 24, Wisma UOA No. 19, Jalan Pinang, Business Suite Unit, Kuala Lumpur, Wilayah Persekutuan, 50450", "lat": 3.1517, "lng": 101.7129},
-    {"city": "Singapore", "address": "#02-01, 68 Circular Road, Singapore, 049422", "lat": 1.2864, "lng": 103.8491},
-    {"city": "Chiswick, UK", "address": "Gold Building 3 Chiswick Business Park, Chiswick, London, W4 5YA", "lat": 51.4937, "lng": -0.2786}
-] 
+ 
 @app.post("/map-query/{session_id}")
 async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data: dict = None):
     try:
@@ -570,6 +555,24 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
         
         logger.info(f"Extracted params: intent={intent}, city_query='{city_query}', nearby_type='{nearby_type}', origin='{origin}'")
 
+        # Hardcoded Quadrant Technologies locations with coordinates
+        quadrant_locations = [
+            {"city": "US, Redmond, WA", "address": "5020, 148th Ave NE Ste 250, Redmond, WA, 98052", "lat": 47.6456, "lng": -122.1419},
+            {"city": "Iselin, NJ", "address": "33 S Wood Ave, Suite 600, Iselin, New Jersey, 08830", "lat": 40.5754, "lng": -74.3282},
+            {"city": "Dallas, TX", "address": "3333 Lee Pkwy #600, Dallas, Texas, 75219", "lat": 32.8085, "lng": -96.8035},
+            {"city": "Hyderabad, Telangana", "address": "4th floor, Building No.21, Raheja Mindspace, Sy No. 64 (Part), Madhapur, Hyderabad, Telangana, 500081", "lat": 17.4416, "lng": 78.3804},
+            {"city": "Bengaluru, Karnataka", "address": "Office No. 106, #1, Navarathna garden, Doddakallasandra Kanakpura Road, Bengaluru, Karnataka, 560062", "lat": 12.8797, "lng": 77.5407},
+            {"city": "Warangal, Telangana", "address": "IT - SEZ, Madikonda, Warangal, Telangana, 506009", "lat": 17.9475, "lng": 79.5781},
+            {"city": "Noida, Uttar Pradesh", "address": "Worcoz, A-24, 1st Floor, Sector 63, Noida, Uttar Pradesh, 201301", "lat": 28.6270, "lng": 77.3727},
+            {"city": "Guadalajara, Mexico", "address": "Amado Nervo 785, Guadalajara, Jalisco, 44656", "lat": 20.6720, "lng": -103.3668},
+            {"city": "Surrey, Canada", "address": "7404 King George Blvd, Suite 200, Surrey, British Columbia, V3W 1N6", "lat": 49.1372, "lng": -122.8457},
+            {"city": "Dubai, UAE", "address": "The Meydan Hotel, Grandstand, 6th floor, Meydan Road, Dubai, Nad Al Sheba", "lat": 25.1560, "lng": 55.2964},
+            {"city": "Lane Cove, Australia", "address": "24 Birdwood Lane, Lane Cove, New South Wales", "lat": -33.8144, "lng": 151.1693},
+            {"city": "Kuala Lumpur, Malaysia", "address": "19A-24-3, Level 24, Wisma UOA No. 19, Jalan Pinang, Business Suite Unit, Kuala Lumpur, Wilayah Persekutuan, 50450", "lat": 3.1517, "lng": 101.7129},
+            {"city": "Singapore", "address": "#02-01, 68 Circular Road, Singapore, 049422", "lat": 1.2864, "lng": 103.8491},
+            {"city": "Chiswick, UK", "address": "Gold Building 3 Chiswick Business Park, Chiswick, London, W4 5YA", "lat": 51.4937, "lng": -0.2786}
+        ]
+
         # Find location based on extracted city
         location = None
         if city_query:
@@ -584,7 +587,33 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                 if not location:
                     raise HTTPException(status_code=404, detail=f"Quadrant Technologies location not found for {city_query}")
 
-        if intent == "nearby":
+        if intent == "multi_location":
+            data_list = []
+            for loc in quadrant_locations:
+                item = {
+                    "city": loc["city"],
+                    "address": loc["address"],
+                    "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc['address'])}",
+                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={loc['lat']},{loc['lng']}&zoom=15&size=150x112&markers=label:Q|color:purple|{loc['lat']},{loc['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                }
+                data_list.append(item)
+            map_data = {"type": "multi_location", "data": data_list}
+            logger.info(f"Multi-location query: returning all {len(data_list)} locations")
+
+        elif intent == "single_location":
+            if location:
+                map_data = {
+                    "type": "address",
+                    "city": location["city"],
+                    "data": location["address"],
+                    "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(location['address'])}",
+                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={location['lat']},{location['lng']}&zoom=15&size=150x112&markers=label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                }
+                logger.info(f"Single location: {location['city']}")
+            else:
+                raise HTTPException(status_code=404, detail=f"Quadrant Technologies location not found for {city_query}")
+
+        elif intent == "nearby":
             if not location:
                 raise HTTPException(status_code=400, detail="Please specify a city for nearby search")
 
@@ -599,14 +628,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             if "more" in query_req.query.lower() if query_req and query_req.query else False:
                 session_storage[session_id]["previous_places"] = []
 
-            # Initialize coordinates list with source Quadrant location
-            coordinates = [{
-                "lat": location["lat"],
-                "lng": location["lng"],
-                "label": location["address"],
-                "color": "purple"
-            }]
-
             # Initial search with specific keyword
             places = gmaps.places_nearby(
                 location={"lat": location["lat"], "lng": location["lng"]},
@@ -617,8 +638,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             data_list = []
             seen_place_ids = set(session_storage[session_id]["previous_places"])
 
-            # Build markers for unified map URL
-            markers = [f"color:purple|label:Q|{location['lat']},{location['lng']}"]
             for place in places['results'][:10]:
                 place_id = place['place_id']
                 place_name = place['name'].lower()
@@ -631,19 +650,13 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                         "name": place['name'],
                         "address": place.get('vicinity', 'N/A'),
                         "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                        "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}",
+                        "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}|label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}",
                         "rating": place.get('rating', 'N/A'),
                         "total_reviews": place.get('user_ratings_total', 0),
                         "type": place_type,
                         "price_level": price_level_display
                     }
                     data_list.append(item)
-                    coordinates.append({
-                        "lat": place_lat,
-                        "lng": place_lng,
-                        "label": place.get('vicinity', place['name'])
-                    })
-                    markers.append(f"color:red|{place_lat},{place_lng}")
                     seen_place_ids.add(place_id)
 
             # Handle pagination for "more" queries
@@ -670,19 +683,13 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                             "name": place['name'],
                             "address": place.get('vicinity', 'N/A'),
                             "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}",
+                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}|label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}",
                             "rating": place.get('rating', 'N/A'),
                             "total_reviews": place.get('user_ratings_total', 0),
                             "type": place_type,
                             "price_level": price_level_display
                         }
                         data_list.append(item)
-                        coordinates.append({
-                            "lat": place_lat,
-                            "lng": place_lng,
-                            "label": place.get('vicinity', place['name'])
-                        })
-                        markers.append(f"color:red|{place_lat},{place_lng}")
                         seen_place_ids.add(place_id)
 
             session_storage[session_id]["previous_places"] = list(seen_place_ids)
@@ -708,47 +715,19 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                             "name": place['name'],
                             "address": place.get('vicinity', 'N/A'),
                             "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}",
+                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}|label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}",
                             "rating": place.get('rating', 'N/A'),
                             "total_reviews": place.get('user_ratings_total', 0),
                             "type": place_type,
                             "price_level": price_level_display
                         }
                         data_list.append(item)
-                        coordinates.append({
-                            "lat": place_lat,
-                            "lng": place_lng,
-                            "label": place.get('vicinity', place['name'])
-                        })
-                        markers.append(f"color:red|{place_lat},{place_lng}")
                         seen_place_ids.add(place_id)
                 session_storage[session_id]["previous_places"] = list(seen_place_ids)
 
             if not data_list:
                 raise HTTPException(status_code=404, detail=f"No {keyword} found near {location['city']}")
-
-            # Calculate center for unified map
-            all_lats = [location["lat"]] + [place["lat"] for place in coordinates[1:]]
-            all_lngs = [location["lng"]] + [place["lng"] for place in coordinates[1:]]
-            center_lat = sum(all_lats) / len(all_lats)
-            center_lng = sum(all_lngs) / len(all_lngs)
-            
-            # Generate unified map URL
-            unified_map_url = f"https://www.google.com/maps/search/?api=1&query={center_lat},{center_lng}&zoom=13"
-            
-            # Generate unified static map URL for preview
-            unified_static_map_url = (
-                f"https://maps.googleapis.com/maps/api/staticmap?center={center_lat},{center_lng}"
-                f"&zoom=13&size=600x300&markers={'|'.join(markers)}&key={GOOGLE_MAPS_API_KEY}"
-            )
-
-            map_data = {
-                "type": "nearby",
-                "data": data_list,
-                "coordinates": coordinates,
-                "map_url": unified_map_url,
-                "static_map_url": unified_static_map_url
-            }
+            map_data = {"type": "nearby", "data": data_list}
 
         elif intent == "directions":
             if not location and not city_query:
