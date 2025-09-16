@@ -31,6 +31,7 @@ import googlemaps
 from googlemaps.exceptions import ApiError
 import urllib.parse
 from rapidfuzz import process, fuzz
+import requests
 
 import math
  
@@ -529,7 +530,22 @@ country_to_city = {
     "canada": "Surrey, Canada",
     "uae": "Dubai, UAE"
 }
- 
+quadrant_locations = [
+    {"city": "US, Redmond, WA", "address": "5020, 148th Ave NE Ste 250, Redmond, WA, 98052", "lat": 47.6456, "lng": -122.1419},
+    {"city": "Iselin, NJ", "address": "33 S Wood Ave, Suite 600, Iselin, New Jersey, 08830", "lat": 40.5754, "lng": -74.3282},
+    {"city": "Dallas, TX", "address": "3333 Lee Pkwy #600, Dallas, Texas, 75219", "lat": 32.8085, "lng": -96.8035},
+    {"city": "Hyderabad, Telangana", "address": "4th floor, Building No.21, Raheja Mindspace, Sy No. 64 (Part), Madhapur, Hyderabad, Telangana, 500081", "lat": 17.4416, "lng": 78.3804},
+    {"city": "Bengaluru, Karnataka", "address": "Office No. 106, #1, Navarathna garden, Doddakallasandra Kanakpura Road, Bengaluru, Karnataka, 560062", "lat": 12.8797, "lng": 77.5407},
+    {"city": "Warangal, Telangana", "address": "IT - SEZ, Madikonda, Warangal, Telangana, 506009", "lat": 17.9475, "lng": 79.5781},
+    {"city": "Noida, Uttar Pradesh", "address": "Worcoz, A-24, 1st Floor, Sector 63, Noida, Uttar Pradesh, 201301", "lat": 28.6270, "lng": 77.3727},
+    {"city": "Guadalajara, Mexico", "address": "Amado Nervo 785, Guadalajara, Jalisco, 44656", "lat": 20.6720, "lng": -103.3668},
+    {"city": "Surrey, Canada", "address": "7404 King George Blvd, Suite 200, Surrey, British Columbia, V3W 1N6", "lat": 49.1372, "lng": -122.8457},
+    {"city": "Dubai, UAE", "address": "The Meydan Hotel, Grandstand, 6th floor, Meydan Road, Dubai, Nad Al Sheba", "lat": 25.1560, "lng": 55.2964},
+    {"city": "Lane Cove, Australia", "address": "24 Birdwood Lane, Lane Cove, New South Wales", "lat": -33.8144, "lng": 151.1693},
+    {"city": "Kuala Lumpur, Malaysia", "address": "19A-24-3, Level 24, Wisma UOA No. 19, Jalan Pinang, Business Suite Unit, Kuala Lumpur, Wilayah Persekutuan, 50450", "lat": 3.1517, "lng": 101.7129},
+    {"city": "Singapore", "address": "#02-01, 68 Circular Road, Singapore, 049422", "lat": 1.2864, "lng": 103.8491},
+    {"city": "Chiswick, UK", "address": "Gold Building 3 Chiswick Business Park, Chiswick, London, W4 5YA", "lat": 51.4937, "lng": -0.2786}
+] 
 @app.post("/map-query/{session_id}")
 async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data: dict = None):
     try:
@@ -549,31 +565,15 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
         nearby_value = intent_data.get("nearby_type") if intent_data else None
         nearby_type = nearby_value.lower() if isinstance(nearby_value, str) else ""
         
-        # Safe extraction for origin
+        # Safe extraction for origin and destination
         origin_value = intent_data.get("origin") if intent_data else None
         origin = origin_value.strip() if isinstance(origin_value, str) else ""
+        destination_value = intent_data.get("destination") if intent_data else None
+        destination = destination_value.strip() if isinstance(destination_value, str) else ""
         
-        logger.info(f"Extracted params: intent={intent}, city_query='{city_query}', nearby_type='{nearby_type}', origin='{origin}'")
+        logger.info(f"Extracted params: intent={intent}, city_query='{city_query}', nearby_type='{nearby_type}', origin='{origin}', destination='{destination}'")
 
-        # Hardcoded Quadrant Technologies locations with coordinates
-        quadrant_locations = [
-            {"city": "US, Redmond, WA", "address": "5020, 148th Ave NE Ste 250, Redmond, WA, 98052", "lat": 47.6456, "lng": -122.1419},
-            {"city": "Iselin, NJ", "address": "33 S Wood Ave, Suite 600, Iselin, New Jersey, 08830", "lat": 40.5754, "lng": -74.3282},
-            {"city": "Dallas, TX", "address": "3333 Lee Pkwy #600, Dallas, Texas, 75219", "lat": 32.8085, "lng": -96.8035},
-            {"city": "Hyderabad, Telangana", "address": "4th floor, Building No.21, Raheja Mindspace, Sy No. 64 (Part), Madhapur, Hyderabad, Telangana, 500081", "lat": 17.4416, "lng": 78.3804},
-            {"city": "Bengaluru, Karnataka", "address": "Office No. 106, #1, Navarathna garden, Doddakallasandra Kanakpura Road, Bengaluru, Karnataka, 560062", "lat": 12.8797, "lng": 77.5407},
-            {"city": "Warangal, Telangana", "address": "IT - SEZ, Madikonda, Warangal, Telangana, 506009", "lat": 17.9475, "lng": 79.5781},
-            {"city": "Noida, Uttar Pradesh", "address": "Worcoz, A-24, 1st Floor, Sector 63, Noida, Uttar Pradesh, 201301", "lat": 28.6270, "lng": 77.3727},
-            {"city": "Guadalajara, Mexico", "address": "Amado Nervo 785, Guadalajara, Jalisco, 44656", "lat": 20.6720, "lng": -103.3668},
-            {"city": "Surrey, Canada", "address": "7404 King George Blvd, Suite 200, Surrey, British Columbia, V3W 1N6", "lat": 49.1372, "lng": -122.8457},
-            {"city": "Dubai, UAE", "address": "The Meydan Hotel, Grandstand, 6th floor, Meydan Road, Dubai, Nad Al Sheba", "lat": 25.1560, "lng": 55.2964},
-            {"city": "Lane Cove, Australia", "address": "24 Birdwood Lane, Lane Cove, New South Wales", "lat": -33.8144, "lng": 151.1693},
-            {"city": "Kuala Lumpur, Malaysia", "address": "19A-24-3, Level 24, Wisma UOA No. 19, Jalan Pinang, Business Suite Unit, Kuala Lumpur, Wilayah Persekutuan, 50450", "lat": 3.1517, "lng": 101.7129},
-            {"city": "Singapore", "address": "#02-01, 68 Circular Road, Singapore, 049422", "lat": 1.2864, "lng": 103.8491},
-            {"city": "Chiswick, UK", "address": "Gold Building 3 Chiswick Business Park, Chiswick, London, W4 5YA", "lat": 51.4937, "lng": -0.2786}
-        ]
-
-        # Find location based on extracted city
+        # Find location based on extracted city (for single_location, nearby, or directions)
         location = None
         if city_query:
             location = next((loc for loc in quadrant_locations if loc["city"].lower() == city_query), None)
@@ -587,31 +587,41 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                 if not location:
                     raise HTTPException(status_code=404, detail=f"Quadrant Technologies location not found for {city_query}")
 
-        if intent == "multi_location":
-            data_list = []
+        if intent == "single_location":
+            if not location:
+                raise HTTPException(status_code=400, detail="Please specify a valid city for location query")
+            
+            # Generate map URLs for the single location
+            map_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(location['address'])}"
+            static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?center={location['lat']},{location['lng']}&zoom=15&size=600x300&markers=color:purple|label:Q|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}"
+            
+            map_data = {
+                "type": "address",
+                "data": location["address"],
+                "city": location["city"],
+                "map_url": map_url,
+                "static_map_url": static_map_url
+            }
+
+        elif intent == "multi_location":
+            # Generate data for all Quadrant Technologies locations
+            locations_data = []
             for loc in quadrant_locations:
-                item = {
+                map_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc['address'])}"
+                static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?center={loc['lat']},{loc['lng']}&zoom=15&size=600x300&markers=color:purple|label:Q|{loc['lat']},{loc['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                locations_data.append({
                     "city": loc["city"],
                     "address": loc["address"],
-                    "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc['address'])}",
-                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={loc['lat']},{loc['lng']}&zoom=15&size=150x112&markers=label:Q|color:purple|{loc['lat']},{loc['lng']}&key={GOOGLE_MAPS_API_KEY}"
-                }
-                data_list.append(item)
-            map_data = {"type": "multi_location", "data": data_list}
-            logger.info(f"Multi-location query: returning all {len(data_list)} locations")
-
-        elif intent == "single_location":
-            if location:
-                map_data = {
-                    "type": "address",
-                    "city": location["city"],
-                    "data": location["address"],
-                    "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(location['address'])}",
-                    "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={location['lat']},{location['lng']}&zoom=15&size=150x112&markers=label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}"
-                }
-                logger.info(f"Single location: {location['city']}")
-            else:
-                raise HTTPException(status_code=404, detail=f"Quadrant Technologies location not found for {city_query}")
+                    "map_url": map_url,
+                    "static_map_url": static_map_url
+                })
+            
+            map_data = {
+                "type": "multi_location",
+                "data": locations_data,
+                "map_url": "https://www.google.com/maps/search/?api=1&query=Quadrant%20Technologies",
+                "static_map_url": None
+            }
 
         elif intent == "nearby":
             if not location:
@@ -628,6 +638,14 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             if "more" in query_req.query.lower() if query_req and query_req.query else False:
                 session_storage[session_id]["previous_places"] = []
 
+            # Initialize coordinates list with source Quadrant location
+            coordinates = [{
+                "lat": location["lat"],
+                "lng": location["lng"],
+                "label": location["address"],
+                "color": "purple"
+            }]
+
             # Initial search with specific keyword
             places = gmaps.places_nearby(
                 location={"lat": location["lat"], "lng": location["lng"]},
@@ -638,6 +656,8 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             data_list = []
             seen_place_ids = set(session_storage[session_id]["previous_places"])
 
+            # Build markers for unified map URL
+            markers = [f"color:purple|label:Q|{location['lat']},{location['lng']}"]
             for place in places['results'][:10]:
                 place_id = place['place_id']
                 place_name = place['name'].lower()
@@ -650,13 +670,19 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                         "name": place['name'],
                         "address": place.get('vicinity', 'N/A'),
                         "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                        "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}|label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}",
+                        "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}",
                         "rating": place.get('rating', 'N/A'),
                         "total_reviews": place.get('user_ratings_total', 0),
                         "type": place_type,
                         "price_level": price_level_display
                     }
                     data_list.append(item)
+                    coordinates.append({
+                        "lat": place_lat,
+                        "lng": place_lng,
+                        "label": place.get('vicinity', place['name'])
+                    })
+                    markers.append(f"color:red|{place_lat},{place_lng}")
                     seen_place_ids.add(place_id)
 
             # Handle pagination for "more" queries
@@ -683,13 +709,19 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                             "name": place['name'],
                             "address": place.get('vicinity', 'N/A'),
                             "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}|label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}",
+                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}",
                             "rating": place.get('rating', 'N/A'),
                             "total_reviews": place.get('user_ratings_total', 0),
                             "type": place_type,
                             "price_level": price_level_display
                         }
                         data_list.append(item)
+                        coordinates.append({
+                            "lat": place_lat,
+                            "lng": place_lng,
+                            "label": place.get('vicinity', place['name'])
+                        })
+                        markers.append(f"color:red|{place_lat},{place_lng}")
                         seen_place_ids.add(place_id)
 
             session_storage[session_id]["previous_places"] = list(seen_place_ids)
@@ -715,29 +747,59 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                             "name": place['name'],
                             "address": place.get('vicinity', 'N/A'),
                             "map_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(place.get('vicinity', place['name']))}",
-                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}|label:Q|color:purple|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}",
+                            "static_map_url": f"https://maps.googleapis.com/maps/api/staticmap?center={place_lat},{place_lng}&zoom=15&size=150x112&markers=color:red|{place_lat},{place_lng}&key={GOOGLE_MAPS_API_KEY}",
                             "rating": place.get('rating', 'N/A'),
                             "total_reviews": place.get('user_ratings_total', 0),
                             "type": place_type,
                             "price_level": price_level_display
                         }
                         data_list.append(item)
+                        coordinates.append({
+                            "lat": place_lat,
+                            "lng": place_lng,
+                            "label": place.get('vicinity', place['name'])
+                        })
+                        markers.append(f"color:red|{place_lat},{place_lng}")
                         seen_place_ids.add(place_id)
                 session_storage[session_id]["previous_places"] = list(seen_place_ids)
 
             if not data_list:
                 raise HTTPException(status_code=404, detail=f"No {keyword} found near {location['city']}")
-            map_data = {"type": "nearby", "data": data_list}
+
+            # Calculate center for unified map
+            all_lats = [location["lat"]] + [place["lat"] for place in coordinates[1:]]
+            all_lngs = [location["lng"]] + [place["lng"] for place in coordinates[1:]]
+            center_lat = sum(all_lats) / len(all_lats)
+            center_lng = sum(all_lngs) / len(all_lngs)
+            
+            # Generate unified map URL
+            unified_map_url = f"https://www.google.com/maps/search/?api=1&query={center_lat},{center_lng}&zoom=13"
+            
+            # Generate unified static map URL for preview
+            unified_static_map_url = (
+                f"https://maps.googleapis.com/maps/api/staticmap?center={center_lat},{center_lng}"
+                f"&zoom=13&size=600x300&markers={'|'.join(markers)}&key={GOOGLE_MAPS_API_KEY}"
+            )
+
+            map_data = {
+                "type": "nearby",
+                "data": data_list,
+                "coordinates": coordinates,
+                "map_url": unified_map_url,
+                "static_map_url": unified_static_map_url
+            }
 
         elif intent == "directions":
             if not location and not city_query:
                 raise HTTPException(status_code=400, detail="Please specify a destination city for directions")
-            destination = location or next((loc for loc in quadrant_locations if loc["city"].lower() == city_query), None)
-            if not destination:
-                raise HTTPException(status_code=404, detail="Destination not found")
-            destination_addr = destination["address"]
+            source = location or next((loc for loc in quadrant_locations if loc["city"].lower() == city_query), None)
+            if not source:
+                raise HTTPException(status_code=404, detail="Source Quadrant location not found")
+            source_addr = source["address"]
+
+            # Existing directions logic for step-by-step navigation (when origin is provided)
             if origin:
-                directions = gmaps.directions(origin, destination_addr, mode="driving")
+                directions = gmaps.directions(origin, source_addr, mode="driving")
                 if directions:
                     legs = directions[0]['legs'][0]
                     steps = [re.sub('<[^<]+?>', '', step['html_instructions']) for step in legs['steps']]
@@ -745,7 +807,7 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                     dest_addr = legs['end_address']
                     encoded_polyline = directions[0]['overview_polyline']['points']
                     map_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origin_addr)}&destination={urllib.parse.quote(dest_addr)}&travelmode=driving"
-                    static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?size=150x112&path=enc:{urllib.parse.quote(encoded_polyline)}&markers=label:Q|color:purple|{destination['lat']},{destination['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                    static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?size=150x112&path=enc:{urllib.parse.quote(encoded_polyline)}&markers=label:Q|color:purple|{source['lat']},{source['lng']}&key={GOOGLE_MAPS_API_KEY}"
                     map_data = {
                         "type": "directions",
                         "data": steps,
@@ -756,6 +818,140 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                     raise HTTPException(status_code=404, detail="Directions not found")
             else:
                 raise HTTPException(status_code=400, detail="Please specify an origin for directions")
+
+        elif intent == "distance":
+            if not location and not city_query:
+                raise HTTPException(status_code=400, detail="Please specify a city for distance query")
+            source = location or next((loc for loc in quadrant_locations if loc["city"].lower() == city_query), None)
+            if not source:
+                raise HTTPException(status_code=404, detail="Source Quadrant location not found")
+            source_addr = source["address"]
+
+            if not destination:
+                raise HTTPException(status_code=400, detail="Please specify a destination for distance query")
+
+            from agent import Agent  # Import Agent class to generate LLM response
+            agent = Agent()  # Initialize Agent (ensure proper initialization with client)
+
+            # Resolve destination address using Places API (New)
+            places_url = "https://places.googleapis.com/v1/places:searchText"
+            headers = {
+                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+                "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location"
+            }
+            payload = {
+                "textQuery": f"{destination} near {source['city']}",
+                "locationBias": {
+                    "circle": {
+                        "center": {"latitude": source["lat"], "longitude": source["lng"]},
+                        "radius": 50000  # 50km radius
+                    }
+                }
+            }
+            try:
+                places_response = requests.post(places_url, json=payload, headers=headers, timeout=10)
+                logger.debug(f"Places API request payload: {payload}")
+                logger.debug(f"Places API response: {places_response.text}")
+                places_response.raise_for_status()
+                places_data = places_response.json()
+                
+                if not places_data.get("places"):
+                    raise HTTPException(status_code=404, detail=f"Could not find a precise location for {destination} near {source['city']}")
+                
+                place = places_data["places"][0]
+                place_id = place.get("id")
+                dest_name = place.get("displayName", {}).get("text", destination)
+                dest_addr = place.get("formattedAddress", dest_name)
+                dest_lat = place.get("location", {}).get("latitude")
+                dest_lng = place.get("location", {}).get("longitude")
+
+                # Validate distance to avoid false positives (e.g., wrong state)
+                if dest_lat and dest_lng:
+                    from math import radians, sin, cos, sqrt, atan2
+                    def haversine_distance(lat1, lon1, lat2, lon2):
+                        R = 6371  # Earth's radius in km
+                        lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+                        dlat = lat2 - lat1
+                        dlon = lon2 - lon1
+                        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+                        c = 2 * atan2(sqrt(a), sqrt(1-a))
+                        return R * c
+                    approx_distance = haversine_distance(source["lat"], source["lng"], dest_lat, dest_lng)
+                    if approx_distance > 100:  # Reject if >100 km
+                        logger.warning(f"Places API returned a location too far away: {dest_addr} ({approx_distance:.1f} km)")
+                        raise HTTPException(status_code=404, detail=f"Found {dest_name} at {dest_addr}, but it's too far from {source['city']}. Please clarify the destination.")
+
+            except requests.RequestException as e:
+                logger.error(f"Places API error: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Google Maps Places API error: {str(e)}")
+
+            # Call Google Maps Routes API with placeId or address
+            routes_url = "https://routes.googleapis.com/directions/v2:computeRoutes"
+            headers = {
+                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+                "X-Goog-FieldMask": "routes.distanceMeters,routes.duration"
+            }
+            payload = {
+                "origin": {"address": source_addr},
+                "destination": {"placeId": place_id} if place_id else {"address": dest_name},
+                "travelMode": "DRIVE",
+                "computeAlternativeRoutes": False,
+                "units": "METRIC"
+            }
+            try:
+                response = requests.post(routes_url, json=payload, headers=headers, timeout=10)
+                logger.debug(f"Routes API request payload: {payload}")
+                logger.debug(f"Routes API response: {response.text}")
+                response.raise_for_status()
+                route_data = response.json()
+                
+                if route_data.get("routes"):
+                    distance_meters = route_data["routes"][0]["distanceMeters"]
+                    duration_seconds = route_data["routes"][0]["duration"]
+                    # Convert distance to kilometers
+                    distance = f"{distance_meters / 1000:.1f} km"
+                    # Convert duration to human-readable format
+                    duration_seconds = int(duration_seconds.rstrip("s"))
+                    duration = f"{duration_seconds // 60} mins" if duration_seconds < 3600 else f"{duration_seconds // 3600} hr {(duration_seconds % 3600) // 60} mins"
+                    origin_addr = source_addr
+                    
+                    # Generate map URLs (use resolved address for map link)
+                    map_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origin_addr)}&destination={urllib.parse.quote(dest_addr)}&travelmode=driving"
+                    static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?center={source['lat']},{source['lng']}&zoom=13&size=150x112&markers=label:Q|color:purple|{source['lat']},{source['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                    
+                    # Generate LLM response
+                    map_data_temp = {
+                        "type": "distance",
+                        "data": {
+                            "origin": origin_addr,
+                            "destination": dest_name,
+                            "distance": distance,
+                            "duration": duration
+                        }
+                    }
+                    llm_response = await agent.process_map_query(map_data_temp, query_req.query, role="candidate")
+                    
+                    map_data = {
+                        "type": "distance",
+                        "data": {
+                            "origin": origin_addr,
+                            "destination": dest_name,
+                            "distance": distance,
+                            "duration": duration
+                        },
+                        "llm_response": llm_response,
+                        "map_url": map_url,
+                        "static_map_url": static_map_url,
+                        "coordinates": [
+                            {"lat": source["lat"], "lng": source["lng"], "label": "Origin", "color": "purple"},
+                            {"lat": dest_lat, "lng": dest_lng, "label": dest_name, "color": "red"}
+                        ]
+                    }
+                else:
+                    raise HTTPException(status_code=404, detail=f"No route found to {dest_name}")
+            except requests.RequestException as e:
+                logger.error(f"Routes API error: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Google Maps Routes API error: {str(e)}")
 
         else:
             raise HTTPException(status_code=400, detail="Invalid map intent")
@@ -768,7 +964,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
         logger.error(f"Error processing map query for session {session_id}: {str(e)}")
         logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error processing map query: {str(e)}")
- 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(session_id: str, websocket: WebSocket):
     if not is_valid_uuid(session_id):

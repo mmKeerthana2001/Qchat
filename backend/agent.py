@@ -5,6 +5,7 @@ from typing import Tuple
 from dotenv import load_dotenv
 import os
 from rapidfuzz import process, fuzz
+import json
 
 load_dotenv()
 logging.basicConfig(level=logging.DEBUG)
@@ -118,7 +119,33 @@ class Agent:
                     return "Directions:\n\n" + "\n".join(
                         f"- {step}" for step in map_data['data']
                     )
-                return ""
+                elif map_data["type"] == "distance":
+                    # Generate LLM response for distance intent
+                    prompt = (
+                        "You are an expert assistant providing location-based information for a job candidate or HR representative. "
+                        f"You are interacting with a {'HR representative' if role == 'hr' else 'job candidate'}. "
+                        "Using the provided map data, generate a concise natural language response to the query. "
+                        "Include the origin, destination, distance, and estimated travel time in a friendly format. "
+                        "Do not include map links, as the UI will handle them. "
+                        f"\n\nMap Data:\n"
+                        f"Origin: {map_data['data']['origin']}\n"
+                        f"Destination: {map_data['data']['destination']}\n"
+                        f"Distance: {map_data['data']['distance']}\n"
+                        f"Duration: {map_data['data']['duration']}\n\n"
+                        f"Query: {query}"
+                    )
+                    response = await self.client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[
+                            {"role": "system", "content": "You are a helpful assistant for providing location-based information."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=200,
+                        temperature=0.7
+                    )
+                    llm_response = response.choices[0].message.content.strip()
+                    logger.info(f"LLM distance response: {llm_response[:100]}...")
+                    return llm_response
             prompt = (
                 "You are an expert assistant providing location-based information for a job candidate or HR representative. "
                 f"You are interacting with a {'HR representative' if role == 'hr' else 'job candidate'}. "
@@ -136,6 +163,15 @@ class Agent:
                 prompt += f"\n\nMap Data:\nDirections:\n" + "\n".join(
                     f"- Step: {step}" for step in map_data['data']
                 ) + f"\n\nQuery: {query}"
+            elif map_data.get("type") == "distance":
+                prompt += (
+                    f"\n\nMap Data:\n"
+                    f"Origin: {map_data['data']['origin']}\n"
+                    f"Destination: {map_data['data']['destination']}\n"
+                    f"Distance: {map_data['data']['distance']}\n"
+                    f"Duration: {map_data['data']['duration']}\n\n"
+                    f"Query: {query}"
+                )
             elif map_data.get("type") == "multi_location":
                 prompt += f"\n\nMap Data:\n" + "\n".join(
                     f"- {item['city']}: {item['address']}" for item in map_data['data']
@@ -157,12 +193,6 @@ class Agent:
             raise
 
     async def classify_intent_and_extract(self, query: str, history: list, role: str) -> dict:
-        """
-        Classifies the query intent and extracts key entities using GPT-4o.
-        First determines if the query is 'map' or 'non_map', then for map queries, classifies
-        into 'single_location', 'multi_location', 'nearby', or 'directions'.
-        Returns a dict with 'is_map' (bool), 'intent' (e.g., 'single_location'), and extracted params like 'city', 'nearby_type', 'origin'.
-        """
         try:
             corrected_query = await self.correct_query(query, history, role)
             prompt = (
@@ -174,15 +204,19 @@ class Agent:
                 "'single_location' (ask for specific office address/city), "
                 "'multi_location' (ask for all offices or multiple cities), "
                 "'nearby' (ask for amenities like PGs/restaurants near an office), "
-                "'directions' (ask for directions to/from an office). "
+                "'directions' (ask for step-by-step directions to/from an office), "
+                "'distance' (ask for distance or travel time to/from an office, e.g., 'how far is airport from Quadrant Hyderabad'). "
                 "Extract entities: city (exact match from known: " + ", ".join(self.quadrant_cities) + "), "
                 "nearby_type (e.g., 'ladies pgs', 'gents pgs', 'restaurants', or infer from query like 'hotels', 'cafes'), "
-                "origin (starting point for directions, e.g., 'from airport'). "
-                "If city is implied (e.g., 'nearby PGs in Hyderabad' implies Quadrant Hyderabad), use it. "
-                "For 'nearby', always use Quadrant office as the source address. "
+                "origin (starting point for directions or distance, e.g., Quadrant office address if not specified), "
+                "destination (endpoint for directions or distance, e.g., 'airport'). "
+                "If city is implied (e.g., 'nearby PGs in Hyderabad' or 'how far is airport from Quadrant Hyderabad' implies Quadrant Hyderabad), use it. "
+                "For 'nearby' and 'directions'/'distance' with no explicit origin, use Quadrant office as the source address. "
+                "For queries containing 'how far' or 'distance', classify as 'distance' intent. "
                 "Output ONLY a valid JSON object. Examples: "
-                "{'is_map': true, 'intent': 'single_location', 'city': 'Bengaluru, Karnataka', 'nearby_type': null, 'origin': null} "
-                "or {'is_map': false, 'intent': 'non_map', 'city': null, 'nearby_type': null, 'origin': null}"
+                "{'is_map': true, 'intent': 'single_location', 'city': 'Bengaluru, Karnataka', 'nearby_type': null, 'origin': null, 'destination': null} "
+                "or {'is_map': true, 'intent': 'distance', 'city': 'Hyderabad, Telangana', 'nearby_type': null, 'origin': null, 'destination': 'airport'} "
+                "or {'is_map': false, 'intent': 'non_map', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null}"
             )
             prompt += f"\n\nConversation History:\n"
             for msg in history[-5:]:  # Limit to recent history for context
@@ -192,46 +226,19 @@ class Agent:
             response = await self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are a JSON-only responder. Output only a valid JSON object with keys: is_map (bool), intent (string), city (string or null), nearby_type (string or null), origin (string or null). No extra text."},
+                    {"role": "system", "content": "You are a JSON-only responder. Output only a valid JSON object with keys: is_map (bool), intent (string), city (string or null), nearby_type (string or null), origin (string or null), destination (string or null). No extra text."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=200,
-                temperature=0.1,  # Even lower for consistency
-                response_format={"type": "json_object"}  # Enforce JSON schema
+                temperature=0.1,
+                response_format={"type": "json_object"}
             )
             raw_content = response.choices[0].message.content.strip()
-            logger.info(f"Raw GPT response for intent classification: '{raw_content}'")  # Debug log
+            logger.info(f"Raw GPT response for intent classification: '{raw_content}'")
             
-            import json
             intent_data = json.loads(raw_content)
             logger.info(f"Intent classification for '{corrected_query}': {intent_data}")
             return intent_data
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error in intent classification (raw: '{raw_content if 'raw_content' in locals() else 'N/A'}'): {e}")
-            
-            # Fallback: Keyword-based detection for map queries
-            query_lower = corrected_query.lower()
-            map_keywords = ["where is", "address", "location", "nearby", "near", "pgs", "pg", "restaurants", "directions", "offices", "locations"]
-            cities_lower = [city.lower() for city in self.quadrant_cities]
-            is_map_fallback = any(kw in query_lower for kw in map_keywords) or any(city in query_lower for city in cities_lower)
-            
-            if is_map_fallback:
-                # Simple extraction for fallback
-                intent_data = {"is_map": True, "intent": "single_location", "city": None, "nearby_type": None, "origin": None}
-                # Try to extract city with fuzzy
-                for city in self.quadrant_cities:
-                    if fuzz.partial_ratio(query_lower, city.lower()) >= 80:
-                        intent_data["city"] = city
-                        intent_data["intent"] = "single_location"
-                        break
-                if any(kw in query_lower for kw in ["pgs", "pg", "restaurants"]):
-                    intent_data["intent"] = "nearby"
-                    intent_data["nearby_type"] = "paying guest, hostel" if "pg" in query_lower else "restaurant"
-            else:
-                intent_data = {"is_map": False, "intent": "non_map", "city": None, "nearby_type": None, "origin": None}
-            
-            logger.info(f"Fallback intent for '{corrected_query}': {intent_data}")
-            return intent_data
         except Exception as e:
             logger.error(f"Error in intent classification: {e}")
-            return {"is_map": False, "intent": "non_map", "city": None, "nearby_type": None, "origin": None}
+            return {"is_map": False, "intent": "non_map", "city": None, "nearby_type": None, "origin": None, "destination": None}
