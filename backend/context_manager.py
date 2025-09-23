@@ -1,3 +1,4 @@
+# Updated context_manager.py
 import uuid
 import asyncio
 import logging
@@ -255,7 +256,7 @@ class ContextManager:
             f"Retrying process_query for session {retry_state.args[0]} due to {retry_state.outcome.exception()}"
         )
     )
-    async def process_query(self, session_id: str, query: str, role: str) -> Tuple[str, List[Dict[str, str]]]:
+    async def process_query(self, session_id: str, query: str, role: str, intent_data: dict = None) -> Tuple[str, dict | None, List[Dict[str, str]]]:
         try:
             collection_name = f"sessions_{session_id}"
             doc_collection = self.db[collection_name]
@@ -281,8 +282,8 @@ class ContextManager:
 
             agent = Agent()
             try:
-                response = await asyncio.wait_for(
-                    agent.process_query(documents, history, query, role),
+                response, media_data = await asyncio.wait_for(
+                    agent.process_query(documents, history, query, role, intent_data),
                     timeout=30.0
                 )
             except asyncio.TimeoutError:
@@ -292,14 +293,14 @@ class ContextManager:
                 logger.error(f"Agent processing error for session {session_id}: {str(e)}")
                 raise
 
-            history.append({"role": role, "query": query, "response": response, "timestamp": time.time()})
+            history.append({"role": role, "query": query, "response": response, "timestamp": time.time(), "intent_data": intent_data})
             await doc_collection.update_one(
                 {"session_id": session_id},
                 {"$set": {"chat_history": history[-10:], "updated_at": time.time()}}
             )
             logger.info(f"Updated chat history for session {session_id}")
 
-            return response, history
+            return response, media_data, history
 
         except Exception as e:
             logger.error(f"Error processing query for session {session_id}: {str(e)}")

@@ -1,0 +1,127 @@
+{
+    "response": "The president of Quadrant Technologies is Bhaskar Gangipamula. Unfortunately, I don't have access to any photos, so I cannot provide a reference to his photo. If you have any further questions about the company or its leadership, feel free to ask!",
+    "history": [
+        {
+            "role": "hr",
+            "query": "Welcome to QChat. Feel free to ask any Questions.",
+            "response": "",
+            "timestamp": 1758542659.2200406
+        },
+        {
+            "role": "candidate",
+            "query": "Who is the chairman of Quadrant Technologies?",
+            "response": "The chairman of Quadrant Technologies is Ram Paluri. Unfortunately, I don't have access to any photos, so I cannot provide a reference to his photo. If you have any further questions about the company or its roles, feel free to ask!",
+            "timestamp": 1758543578.4772503,
+            "intent_data": {
+                "is_map": false,
+                "intent": "chairman",
+                "city": null,
+                "nearby_type": null,
+                "origin": null,
+                "destination": null
+            }
+        },
+        {
+            "role": "candidate",
+            "query": "Who is the president of Quadrant Technologies?",
+            "response": "The president of Quadrant Technologies is Bhaskar Gangipamula. If you have any more questions about the company or its leadership, feel free to ask!",
+            "timestamp": 1758543626.887035,
+            "intent_data": {
+                "is_map": false,
+                "intent": "chairman",
+                "city": null,
+                "nearby_type": null,
+                "origin": null,
+                "destination": null
+            }
+        },
+        {
+            "role": "candidate",
+            "query": "president of Quadrant Technologies",
+            "response": "The president of Quadrant Technologies is Bhaskar Gangipamula. If you have any more questions about the company or its leadership, feel free to ask!",
+            "timestamp": 1758544528.7670202,
+            "intent_data": {
+                "is_map": false,
+                "intent": "chairman",
+                "city": null,
+                "nearby_type": null,
+                "origin": null,
+                "destination": null
+            }
+        },
+        {
+            "role": "candidate",
+            "query": "chairman of Quadrant Technologies",
+            "response": "The chairman of Quadrant Technologies is Ram Paluri. Unfortunately, I don't have access to any photos, so I cannot provide a reference to his photo. If you have any further questions about the company or its roles, feel free to ask!",
+            "timestamp": 1758544564.9127648,
+            "intent_data": {
+                "is_map": false,
+                "intent": "chairman",
+                "city": null,
+                "nearby_type": null,
+                "origin": null,
+                "destination": null
+            }
+        },
+        {
+            "role": "candidate",
+            "query": "Who is the president of Quadrant Technologies?",
+            "response": "The president of Quadrant Technologies is Bhaskar Gangipamula. Unfortunately, I don't have access to any photos, so I cannot provide a reference to his photo. If you have any further questions about the company or its leadership, feel free to ask!",
+            "timestamp": 1758605304.7841287,
+            "intent_data": {
+                "is_map": false,
+                "intent": "president",
+                "city": null,
+                "nearby_type": null,
+                "origin": null,
+                "destination": null
+            }
+        },
+        {
+            "role": "candidate",
+            "query": "Who is the president of Quadrant Technologies?",
+            "response": "The president of Quadrant Technologies is Bhaskar Gangipamula. Unfortunately, I don't have access to any photos, so I cannot provide a reference to his photo. If you have any further questions about the company or its leadership, feel free to ask!",
+            "timestamp": 1758605627.3136988,
+            "intent_data": {
+                "is_map": false,
+                "intent": "president",
+                "city": null,
+                "nearby_type": null,
+                "origin": null,
+                "destination": null
+            }
+        },
+        {
+            "role": "candidate",
+            "query": "Who is the president of Quadrant Technologies?",
+            "response": "The president of Quadrant Technologies is Bhaskar Gangipamula. Unfortunately, I don't have access to any photos, so I cannot provide a reference to his photo. If you have any further questions about the company or its leadership, feel free to ask!",
+            "timestamp": 1758607208.0564163,
+            "intent_data": {
+                "is_map": false,
+                "intent": "president",
+                "city": null,
+                "nearby_type": null,
+                "origin": null,
+                "destination": null
+            }
+        },
+        {
+            "role": "candidate",
+            "query": "Who is the president of Quadrant Technologies?",
+            "response": "The president of Quadrant Technologies is Bhaskar Gangipamula. Unfortunately, I don't have access to any photos, so I cannot provide a reference to his photo. If you have any further questions about the company or its leadership, feel free to ask!",
+            "timestamp": 1758607842.1255815,
+            "intent_data": {
+                "is_map": false,
+                "intent": "president",
+                "city": null,
+                "nearby_type": null,
+                "origin": null,
+                "destination": null
+            }
+        }
+    ],
+    "media_data": {
+        "type": "image",
+        "url": "http://localhost:8080/assets/bhaskar.jpg"
+    }
+}

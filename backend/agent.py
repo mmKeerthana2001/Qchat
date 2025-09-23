@@ -1,3 +1,4 @@
+
 import asyncio
 import logging
 from openai import AsyncOpenAI
@@ -6,6 +7,7 @@ from dotenv import load_dotenv
 import os
 from rapidfuzz import process, fuzz
 import json
+import re
 
 load_dotenv()
 logging.basicConfig(level=logging.DEBUG)
@@ -27,7 +29,10 @@ class Agent:
             "What is the expected start date?",
             "What is the address of Quadrant Technologies?",
             "Are there any PGs or restaurants near Quadrant Technologies?",
-            "Where are all the Quadrant Technologies offices located?"
+            "Where are all the Quadrant Technologies offices located?",
+            "Show me the company video",
+            "What is the dress code?",
+            "Who is the chairman?"
         ]
         self.quadrant_cities = [
             "Redmond, WA", "Iselin, NJ", "Dallas, TX", "Hyderabad, Telangana",
@@ -36,6 +41,41 @@ class Agent:
             "Kuala Lumpur, Malaysia", "Singapore", "Chiswick, UK"
         ]
         self.common_terms = ["restaurants", "restaurant", "pgs", "pg", "nearby", "near", "address", "locations", "offices"]
+        
+        # Load media URLs from .env
+        self.video_url = os.getenv("VIDEO_URL")
+        self.dress_code_image_url = os.getenv("DRESS_CODE_IMAGE_URL")
+        self.president_image_url = os.getenv("PRESIDENT_IMAGE_URL")
+        if not self.president_image_url:
+            logger.warning("PRESIDENT_IMAGE_URL not found in .env file, defaulting to empty string")
+            self.president_image_url = ""
+        logger.info(f"Loaded VIDEO_URL: {self.video_url}")
+        logger.info(f"Loaded PRESIDENT_IMAGE_URL: {self.president_image_url}")
+
+        # Dress item to image URL mapping
+        self.dress_images = {
+            "formal trousers": os.getenv("DRESS_FORMAL_TROUSERS_URL", "http://localhost:8080/assets/formal-trousers.jpg"),
+            "formal shirt": os.getenv("DRESS_FORMAL_SHIRT_URL", "http://localhost:8080/assets/formal-shirt.jpg"),
+            "jeans": os.getenv("DRESS_JEANS_URL", "http://localhost:8080/assets/jeans.jpg"),
+            "round t-shirt": os.getenv("DRESS_ROUND_TSHIRT_URL", "http://localhost:8080/assets/round-tshirt.jpg"),
+            "polo t-shirt": os.getenv("DRESS_POLO_TSHIRT_URL", "http://localhost:8080/assets/polo-tshirt.jpg"),
+            "collared t-shirt": os.getenv("DRESS_COLLARD_TSHIRT_URL", "http://localhost:8080/assets/collared-tshirt.jpg"),
+            "formal shoes": os.getenv("DRESS_FORMAL_SHOES_URL", "http://localhost:8080/assets/formal-shoes.jpg"),
+            "casual shoes": os.getenv("DRESS_CASUAL_SHOES_URL", "http://localhost:8080/assets/casual-shoes.jpg"),
+            "salwar kameez": os.getenv("DRESS_SALWAR_KAMEEZ_URL", "http://localhost:8080/assets/salwar-kameez.jpg"),
+            "churidar": os.getenv("DRESS_CHURIDAR_URL", "http://localhost:8080/assets/churidar.jpg"),
+            "kurta": os.getenv("DRESS_KURTA_URL", "http://localhost:8080/assets/kurta.jpg"),
+            "saree": os.getenv("DRESS_SAREE_URL", "http://localhost:8080/assets/saree.jpg"),
+            "long frock": os.getenv("DRESS_LONG_FROCK_URL", "http://localhost:8080/assets/long-frock.jpg"),
+            "slip-ons": os.getenv("DRESS_SLIPONS_URL", "http://localhost:8080/assets/slip-ons.jpg"),
+            "boots": os.getenv("DRESS_BOOTS_URL", "http://localhost:8080/assets/boots.jpg"),
+            "sandals": os.getenv("DRESS_SANDALS_URL", "http://localhost:8080/assets/sandals.jpg"),
+            "sports shoes": os.getenv("DRESS_SPORTS_SHOES_URL", "http://localhost:8080/assets/sports-shoes.jpg"),
+            "sneakers": os.getenv("DRESS_SNEAKERS_URL", "http://localhost:8080/assets/sneakers.jpg"),
+            "loafers": os.getenv("DRESS_LOAFERS_URL", "http://localhost:8080/assets/loafers.jpg"),
+        }
+        self.dress_images = {k: v for k, v in self.dress_images.items() if v}
+        logger.info(f"Loaded {len(self.dress_images)} dress images")
     
     async def correct_query(self, query: str, history: list, role: str) -> str:
         try:
@@ -78,7 +118,31 @@ class Agent:
             logger.error(f"Error correcting query: {e}")
             return corrected_query
 
-    async def process_query(self, documents: str, history: list, query: str, role: str) -> str:
+    def _insert_dress_images(self, answer: str) -> str:
+        """Post-process dress code response to insert small inline images for all matching dress items."""
+        lines = answer.split('\n')
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('- '):
+                item_text = stripped[2:].strip().lower()
+                matched_items = []
+                for key in self.dress_images:
+                    if key in item_text:
+                        matched_items.append(key)
+                img_tags = []
+                for matched_item in matched_items:
+                    url = self.dress_images[matched_item]
+                    img_tag = f' <img src="{url}" width="24" height="24" alt="{matched_item}" style="vertical-align: middle; margin-left: 8px;" />'
+                    img_tags.append(img_tag)
+                indent = line[:line.find('-')]
+                new_line = f"{indent}- {item_text}{''.join(img_tags)}"
+            else:
+                new_line = line
+            new_lines.append(new_line)
+        return '\n'.join(new_lines)
+
+    async def process_query(self, documents: str, history: list, query: str, role: str, intent_data: dict) -> Tuple[str, dict | None]:
         try:
             prompt = (
                 "You are an expert assistant analyzing job descriptions and resumes, designed to maintain conversation context like a chat application. "
@@ -86,7 +150,8 @@ class Agent:
                 "Below is the extracted text from relevant document sections and the conversation history. "
                 "Answer the user's query based on the document content and prior conversation. "
                 "Provide a concise and accurate response. If the query cannot be answered based on the provided text or history, say so clearly. "
-                "Support follow-up questions and topic switches while maintaining context."
+                "Support follow-up questions and topic switches while maintaining context. "
+                "For queries about the president, do not mention any photo or link in the response text."
             )
             if role == "candidate":
                 prompt += f"\n\nSuggested Questions for Candidate:\n" + "\n".join(f"- {q}" for q in self.suggested_questions)
@@ -94,6 +159,25 @@ class Agent:
             for msg in history:
                 prompt += f"{msg['role'].capitalize()}: {msg['query']}\nAssistant: {msg['response']}\n"
             prompt += f"\n{role.capitalize()} Query: {query}"
+
+            media_data = None
+            gender = intent_data.get("gender")
+            if intent_data.get("intent") == "video":
+                prompt += "\nIf the query is about videos or company overview, provide a brief introduction to the video and reference that the company video is available for viewing. Structure the response professionally: Start with a short description (e.g., 'This video showcases the AI-empowered solutions of Quadrant Technologies.'), then mention 'You can watch the company video below for more details.' End with 'If you have any further questions, feel free to ask!'"
+                media_data = {"type": "video", "url": self.video_url} if self.video_url else None
+                if not self.video_url:
+                    prompt += "\nNote: If no video URL is available, mention that the video will be provided soon."
+            elif intent_data.get("intent") == "dress":
+                if gender:
+                    gender_cap = gender.capitalize()
+                    prompt += f"\nIf the query is about dress code for {gender}, structure the response starting with 'For {gender_cap} Employees:' followed by bullet points for categories like Business Formals (Monday – Thursday), Smart Casuals (Friday), Footwear, Hair & Beard/Jewelry, Not Allowed. End with 'For more details, you can view the dress code image here. If you have any further questions, feel free to ask!'"
+                else:
+                    prompt += "\nIf the query is about dress code, structure the response with two main sections: 'For Male Employees:' and 'For Female Employees:', each followed by bullet points for categories like Business Formals (Monday – Thursday), Smart Casuals (Friday), Footwear, Hair & Beard/Jewelry, Not Allowed. End with 'For more details, you can view the dress code image here. If you have any further questions, feel free to ask!'"
+                media_data = {"type": "image", "url": self.dress_code_image_url} if self.dress_code_image_url else None
+            elif intent_data.get("intent") == "president":
+                media_data = {"type": "image", "url": self.president_image_url} if self.president_image_url else None
+                logger.debug(f"President intent detected, media_data set to: {media_data}")
+
             response = await self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -104,8 +188,22 @@ class Agent:
                 temperature=0.7
             )
             answer = response.choices[0].message.content.strip()
+
+            # Post-process for dress: insert inline images for all matching items
+            if intent_data.get("intent") == "dress":
+                answer = self._insert_dress_images(answer)
+
+            # Post-process for president: remove photo/link references
+            if intent_data.get("intent") == "president":
+                if "photo" in answer.lower() or "link" in answer.lower():
+                    answer = answer.split("You can view")[0].strip()
+                    if not answer.endswith("."):
+                        answer += "."
+                    answer += " If you have any further questions about the company or its leadership, feel free to ask!"
+
             logger.info(f"LLM response: {answer[:100]}...")
-            return answer
+            logger.debug(f"Returning media_data: {media_data}")
+            return answer, media_data
         except Exception as e:
             logger.error(f"Error processing query: {e}")
             raise
@@ -114,13 +212,12 @@ class Agent:
         try:
             if map_data:
                 if map_data["type"] in ["address", "nearby", "multi_location"]:
-                    return ""  # Return empty string for address, nearby, and multi_location to let frontend render UI
+                    return ""
                 elif map_data["type"] == "directions":
                     return "Directions:\n\n" + "\n".join(
                         f"- {step}" for step in map_data['data']
                     )
                 elif map_data["type"] == "distance":
-                    # Generate LLM response for distance intent
                     prompt = (
                         "You are an expert assistant providing location-based information for a job candidate or HR representative. "
                         f"You are interacting with a {'HR representative' if role == 'hr' else 'job candidate'}. "
@@ -213,20 +310,30 @@ class Agent:
                 "If city is implied (e.g., 'nearby PGs in Hyderabad' or 'how far is airport from Quadrant Hyderabad' implies Quadrant Hyderabad), use it. "
                 "For 'nearby' and 'directions'/'distance' with no explicit origin, use Quadrant office as the source address. "
                 "For queries containing 'how far' or 'distance', classify as 'distance' intent. "
+                "If not map-related, classify the intent into one of: "
+                "'video' (queries related to videos, company videos, or any video content), "
+                "'dress' (queries related to dress code, what to wear, or clothing policies), "
+                "'president' (queries related to the president, company leadership, or president details), "
+                "'document' (any other general query to be answered from uploaded documents). "
+                "For 'dress' intent, also extract 'gender': 'male' if the query mentions male/men/gents, 'female' if female/women/ladies, else null. "
                 "Output ONLY a valid JSON object. Examples: "
-                "{'is_map': true, 'intent': 'single_location', 'city': 'Bengaluru, Karnataka', 'nearby_type': null, 'origin': null, 'destination': null} "
-                "or {'is_map': true, 'intent': 'distance', 'city': 'Hyderabad, Telangana', 'nearby_type': null, 'origin': null, 'destination': 'airport'} "
-                "or {'is_map': false, 'intent': 'non_map', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null}"
+                "{'is_map': true, 'intent': 'single_location', 'city': 'Bengaluru, Karnataka', 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null} "
+                "or {'is_map': true, 'intent': 'distance', 'city': 'Hyderabad, Telangana', 'nearby_type': null, 'origin': null, 'destination': 'airport', 'gender': null} "
+                "or {'is_map': false, 'intent': 'video', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null} "
+                "or {'is_map': false, 'intent': 'dress', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': 'male'} "
+                "or {'is_map': false, 'intent': 'dress', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null} "
+                "or {'is_map': false, 'intent': 'president', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null} "
+                "or {'is_map': false, 'intent': 'document', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null}"
             )
             prompt += f"\n\nConversation History:\n"
-            for msg in history[-5:]:  # Limit to recent history for context
+            for msg in history[-5:]:
                 prompt += f"{msg['role'].capitalize()}: {msg['query']}\nAssistant: {msg['response']}\n"
             prompt += f"\nQuery: {corrected_query}\nJSON Output:"
 
             response = await self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are a JSON-only responder. Output only a valid JSON object with keys: is_map (bool), intent (string), city (string or null), nearby_type (string or null), origin (string or null), destination (string or null). No extra text."},
+                    {"role": "system", "content": "You are a JSON-only responder. Output only a valid JSON object with keys: is_map (bool), intent (string), city (string or null), nearby_type (string or null), origin (string or null), destination (string or null), gender (string or null). No extra text."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=200,
@@ -241,4 +348,4 @@ class Agent:
             return intent_data
         except Exception as e:
             logger.error(f"Error in intent classification: {e}")
-            return {"is_map": False, "intent": "non_map", "city": None, "nearby_type": None, "origin": None, "destination": None}
+            return {"is_map": False, "intent": "document", "city": None, "nearby_type": None, "origin": None, "destination": None, "gender": None}

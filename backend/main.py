@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, WebSocket, WebSocketDisconnect, Depends
@@ -412,7 +413,8 @@ async def validate_token(token: str):
     except Exception as e:
         logger.error(f"Unexpected error validating token {token}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error validating token: {str(e)}")
- 
+
+# Updated main.py endpoint
 @app.post("/chat/{session_id}")
 async def chat_with_documents(session_id: str, query_req: QueryRequest):
     try:
@@ -431,18 +433,19 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
 
         is_map_query = intent_data.get("is_map", False)
         map_data = None
+        media_data = None
         if is_map_query:
             logger.info(f"Routing query '{query_corrected}' as map-related (is_map: {is_map_query}) with intent_data: {intent_data}")
             try:
                 map_data = await handle_map_query(session_id, QueryRequest(
-                    query=query_corrected,  # Pass corrected query for logging
+                    query=query_corrected,
                     role=query_req.role,
                     voice_mode=query_req.voice_mode
                 ), intent_data)
                 response, history = await context_manager.process_map_query(session_id, query_corrected, query_req.role, map_data, intent_data)
-            except Exception as e:  # Catch all exceptions, not just HTTPException
+            except Exception as e:
                 logger.error(f"Map query failed for session {session_id}: {str(e)}")
-                logger.error(f"Full traceback: {traceback.format_exc()}")  # Add full traceback for debugging
+                logger.error(f"Full traceback: {traceback.format_exc()}")
                 logger.error(f"Intent data: {intent_data}, Query: {query_corrected}")
                 response = f"Sorry, I couldn't process the location request for '{query_corrected}'. Please rephrase."
                 history.append({
@@ -453,7 +456,6 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
                     "intent_data": intent_data,
                     "map_data": None
                 })
-                # Directly update chat_history without store_session_data (avoids Qdrant embedding)
                 collection_name = f"sessions_{session_id}"
                 await context_manager.db[collection_name].update_one(
                     {"session_id": session_id},
@@ -461,10 +463,9 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
                 )
                 logger.warning(f"Fallback response stored for map query failure in session {session_id}")
         else:
-            logger.info(f"Routing query '{query_corrected}' as non-map (is_map: {is_map_query})")
-            # Existing non-map logic remains unchanged
+            logger.info(f"Routing query '{query_corrected}' as non-map (is_map: {is_map_query}) with intent_data: {intent_data}")
             session_data = await context_manager.get_session(session_id)
-            if not session_data.get("extracted_text"):
+            if not session_data.get("extracted_text") and intent_data.get("intent") == "document":
                 response = "No documents available to answer your query. Please upload relevant documents or ask a location-based question."
                 history.append({
                     "role": query_req.role,
@@ -475,7 +476,8 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
                 })
                 await context_manager.store_session_data(session_id, {"extracted_text": {}})
             else:
-                response, history = await context_manager.process_query(session_id, query_corrected, query_req.role)
+                response, media_data, history = await context_manager.process_query(session_id, query_corrected, query_req.role, intent_data=intent_data)
+                logger.debug(f"Non-map query processed, media_data: {media_data}")
        
         if session_id in websocket_connections:
             for ws in websocket_connections[session_id]:
@@ -485,16 +487,28 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
                         "content": query_req.query,
                         "timestamp": time.time()
                     })
-                    await ws.send_json({
+                    ws_response = {
                         "role": "assistant",
                         "content": response,
                         "timestamp": time.time(),
-                        "map_data": map_data if is_map_query and 'map_data' in locals() else None
-                    })
-                except:
+                    }
+                    if is_map_query:
+                        ws_response["map_data"] = map_data
+                    else:
+                        ws_response["media_data"] = media_data
+                    logger.debug(f"Sending WebSocket response: {ws_response}")
+                    await ws.send_json(ws_response)
+                except Exception as e:
+                    logger.error(f"WebSocket error for session {session_id}: {str(e)}")
                     websocket_connections[session_id].remove(ws)
  
-        response_data = {"response": response, "history": history}
+        response_data = {
+            "response": response,
+            "history": history
+        }
+        if not is_map_query and media_data:
+            response_data["media_data"] = media_data
+            logger.debug(f"Including media_data in HTTP response: {media_data}")
         if query_req.voice_mode:
             if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
                 raise HTTPException(status_code=500, detail="AWS credentials not configured")
@@ -520,8 +534,8 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
     except Exception as e:
         logger.error(f"Error processing chat query for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing chat query: {str(e)}")
- 
-# Mapping for country names to specific cities
+
+
 country_to_city = {
     "malaysia": "Kuala Lumpur, Malaysia",
     "australia": "Lane Cove, Australia",
@@ -545,7 +559,11 @@ quadrant_locations = [
     {"city": "Kuala Lumpur, Malaysia", "address": "19A-24-3, Level 24, Wisma UOA No. 19, Jalan Pinang, Business Suite Unit, Kuala Lumpur, Wilayah Persekutuan, 50450", "lat": 3.1517, "lng": 101.7129},
     {"city": "Singapore", "address": "#02-01, 68 Circular Road, Singapore, 049422", "lat": 1.2864, "lng": 103.8491},
     {"city": "Chiswick, UK", "address": "Gold Building 3 Chiswick Business Park, Chiswick, London, W4 5YA", "lat": 51.4937, "lng": -0.2786}
-] 
+]
+ 
+
+
+
 @app.post("/map-query/{session_id}")
 async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data: dict = None):
     try:
@@ -1040,5 +1058,3 @@ async def transcribe_websocket(session_id: str, websocket: WebSocket):
         await websocket.close(code=1011, reason=str(e))
     finally:
         await websocket.close(code=1000, reason="Transcription completed")
-
- 

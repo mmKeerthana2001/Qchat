@@ -12,3 +12,10 @@ qdrant-client
 sentence-transformers
 python-dotenv
 openai
+tenacity
+rapidfuzz
+msal
+amazon_transcribe
+googlemaps
+ 
+ 
