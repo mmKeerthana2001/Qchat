@@ -1,48 +1,68 @@
-import { useState, useEffect, useRef } from "react"
-import { useSearchParams } from "react-router-dom"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { toast } from "@/components/ui/sonner"
-import { Mic, StopCircle, Send, Loader2, User, Bot, Sparkles, MapPin, Star } from "lucide-react"
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+
+import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { toast } from "@/components/ui/sonner";
+import { Mic, StopCircle, Send, Loader2, User, Bot, Sparkles, MapPin, Star } from "lucide-react";
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import DOMPurify from 'dompurify';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 interface MapData {
-  type: "address" | "nearby" | "directions" | "multi_location" | "distance"
-  data: string | { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[] | string[] | { city: string; address: string; map_url?: string; static_map_url?: string }[] | { origin: string; destination: string; distance: string; duration: string }
-  map_url?: string
-  static_map_url?: string
-  coordinates?: { lat: number; lng: number; label: string; color?: string }[]
-  llm_response?: string
+  type: "address" | "nearby" | "directions" | "multi_location" | "distance";
+  data: string | { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[] | string[] | { city: string; address: string; map_url?: string; static_map_url?: string }[] | { origin: string; destination: string; distance: string; duration: string };
+  map_url?: string;
+  static_map_url?: string;
+  coordinates?: { lat: number; lng: number; label: string; color?: string }[];
+  llm_response?: string;
+}
+
+interface MediaData {
+  type: "video" | "image";
+  url: string;
 }
 
 interface Message {
-  id: string
-  role: "user" | "assistant" | "system" | "hr" | "candidate"
-  content: string
-  timestamp: Date
-  audio_base64?: string
-  map_data?: MapData
+  id: string;
+  role: "user" | "assistant" | "system" | "hr" | "candidate";
+  content: string;
+  timestamp: Date;
+  audio_base64?: string;
+  map_data?: MapData;
+  media_data?: MediaData;
 }
 
 function CandidateChat() {
-  const [searchParams] = useSearchParams()
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
-  const [message, setMessage] = useState("")
-  const [isVoiceMode, setIsVoiceMode] = useState(false)
-  const [isRecording, setIsRecording] = useState(false)
-  const [liveTranscript, setLiveTranscript] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [websocket, setWebsocket] = useState<WebSocket | null>(null)
-  const [audioContext, setAudioContext] = useState<AudioContext | null>(null)
-  const [processor, setProcessor] = useState<ScriptProcessorNode | null>(null)
-  const [stream, setStream] = useState<MediaStream | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const scrollAreaRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<HTMLDivElement>(null)
+  const [searchParams] = useSearchParams();
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [message, setMessage] = useState("");
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [websocket, setWebsocket] = useState<WebSocket | null>(null);
+  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
+  const [processor, setProcessor] = useState<ScriptProcessorNode | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [selectedImage, setSelectedImage] = useState<{ src: string; alt: string } | null>(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<HTMLDivElement>(null);
+
+  const DEBUG = true;
 
   const suggestedQuestions = [
     "What is the salary range for this position?",
@@ -51,40 +71,39 @@ function CandidateChat() {
     "What benefits does the company offer?",
     "What is the expected start date?",
     "What is the address of Quadrant Technologies?",
-    "Restaurants near Quadrant Technologies",
-    "Directions to Quadrant Technologies from New York",
-    "How far is the airport from Quadrant Hyderabad?",
-    "Where are all the Quadrant Technologies offices located?"
-  ]
+    "Are there any PGs or restaurants near Quadrant Technologies?",
+    "Where are all the Quadrant Technologies offices located?",
+    "Show me the company video",
+    "What is the dress code?",
+    "Who is the chairman?"
+  ];
 
-  // Load Google Maps API script dynamically
   useEffect(() => {
     const loadGoogleMapsScript = () => {
-      if (window.google?.maps) return // Script already loaded
+      if (window.google?.maps) return;
 
-      const script = document.createElement("script")
-      script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyBfdwifhc_fFYHempQVUOqR7AW8C8ynsI4&libraries=places`
-      script.async = true
-      script.defer = true
-      script.onload = () => console.log("Google Maps API loaded")
-      script.onerror = () => toast.error("Failed to load Google Maps API", { duration: 10000 })
-      document.head.appendChild(script)
-    }
-    loadGoogleMapsScript()
-  }, [])
+      const script = document.createElement("script");
+      script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyBfdwifhc_fFYHempQVUOqR7AW8C8ynsI4&libraries=places`;
+      script.async = true;
+      script.defer = true;
+      script.onload = () => console.log("Google Maps API loaded");
+      script.onerror = () => toast.error("Failed to load Google Maps API", { duration: 10000 });
+      document.head.appendChild(script);
+    };
+    loadGoogleMapsScript();
+  }, []);
 
-  // Initialize map for nearby queries
   useEffect(() => {
-    const lastMessage = messages[messages.length - 1]
+    const lastMessage = messages[messages.length - 1];
     if (lastMessage?.map_data?.type === "nearby" && lastMessage.map_data.coordinates && mapRef.current && window.google?.maps) {
-      const coordinates = lastMessage.map_data.coordinates
-      const centerLat = coordinates.reduce((sum, coord) => sum + coord.lat, 0) / coordinates.length
-      const centerLng = coordinates.reduce((sum, coord) => sum + coord.lng, 0) / coordinates.length
+      const coordinates = lastMessage.map_data.coordinates;
+      const centerLat = coordinates.reduce((sum, coord) => sum + coord.lat, 0) / coordinates.length;
+      const centerLng = coordinates.reduce((sum, coord) => sum + coord.lng, 0) / coordinates.length;
 
       const map = new window.google.maps.Map(mapRef.current, {
         zoom: 13,
         center: { lat: centerLat, lng: centerLng },
-      })
+      });
 
       coordinates.forEach((coord, index) => {
         new window.google.maps.Marker({
@@ -94,26 +113,26 @@ function CandidateChat() {
           icon: {
             url: `http://maps.google.com/mapfiles/ms/icons/${coord.color || 'red'}-dot.png`
           }
-        })
-      })
+        });
+      });
     }
-  }, [messages])
+  }, [messages]);
 
   useEffect(() => {
-    const token = searchParams.get("token")
+    const token = searchParams.get("token");
     if (token) {
       fetch(`http://localhost:8000/validate-token/?token=${token}`)
         .then(response => {
-          if (!response.ok) throw new Error("Invalid token")
-          return response.json()
+          if (!response.ok) throw new Error("Invalid token");
+          return response.json();
         })
         .then(data => setSessionId(data.session_id))
         .catch(error => {
-          console.error("Token validation error:", error)
-          toast.error("Invalid or expired link", { duration: 10000 })
-        })
+          console.error("Token validation error:", error);
+          toast.error("Invalid or expired link", { duration: 10000 });
+        });
     }
-  }, [searchParams])
+  }, [searchParams]);
 
   useEffect(() => {
     if (sessionId) {
@@ -132,29 +151,33 @@ function CandidateChat() {
               map_url: msg.map_data.map_url,
               static_map_url: msg.map_data.static_map_url,
               coordinates: msg.map_data.coordinates
+            } : undefined,
+            media_data: msg.media_data ? {
+              type: msg.media_data.type,
+              url: msg.media_data.url
             } : undefined
-          }))
-          setMessages(fetchedMessages)
+          }));
+          setMessages(fetchedMessages);
         })
         .catch(error => {
-          console.error("Error fetching messages:", error)
-          toast.error("Failed to load messages", { duration: 10000 })
-        })
+          console.error("Error fetching messages:", error);
+          toast.error("Failed to load messages", { duration: 10000 });
+        });
 
-      const ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`)
-      setWebsocket(ws)
+      const ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`);
+      setWebsocket(ws);
 
       ws.onopen = () => {
-        console.log("WebSocket connected for candidate session:", sessionId)
-        ws.send(JSON.stringify({ type: "ping" }))
-      }
+        console.log("WebSocket connected for candidate session:", sessionId);
+        ws.send(JSON.stringify({ type: "ping" }));
+      };
 
       ws.onmessage = async (event) => {
         try {
-          const data = JSON.parse(event.data)
+          const data = JSON.parse(event.data);
           if (data.type === "pong") {
-            console.log("Received pong, WebSocket alive")
-            return
+            console.log("Received pong, WebSocket alive");
+            return;
           }
           const newMessage: Message = {
             id: crypto.randomUUID(),
@@ -168,98 +191,102 @@ function CandidateChat() {
               map_url: data.map_data.map_url,
               static_map_url: data.map_data.static_map_url,
               coordinates: data.map_data.coordinates
+            } : undefined,
+            media_data: data.media_data ? {
+              type: data.media_data.type,
+              url: data.media_data.url
             } : undefined
-          }
+          };
           setMessages(prev => {
             const isDuplicate = prev.some(
               msg =>
                 msg.role === newMessage.role &&
                 msg.content === newMessage.content &&
                 Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 500
-            )
+            );
             if (isDuplicate) {
-              console.log("Duplicate WebSocket message ignored:", data)
-              return prev
+              console.log("Duplicate WebSocket message ignored:", data);
+              return prev;
             }
-            return [...prev, newMessage]
-          })
-          toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 })
+            return [...prev, newMessage];
+          });
+          toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 });
         } catch (error) {
-          console.error("Error parsing WebSocket message:", error)
-          toast.error("Failed to process incoming message", { duration: 5000 })
+          console.error("Error parsing WebSocket message:", error);
+          toast.error("Failed to process incoming message", { duration: 5000 });
         }
-      }
+      };
 
       ws.onclose = () => {
-        console.log("WebSocket closed for session:", sessionId)
-        toast.warning("WebSocket connection closed", { duration: 10000 })
-      }
+        console.log("WebSocket closed for session:", sessionId);
+        toast.warning("WebSocket connection closed", { duration: 10000 });
+      };
 
       ws.onerror = (error) => {
-        console.error("WebSocket error:", error)
-        toast.error("WebSocket connection error", { duration: 10000 })
-      }
+        console.error("WebSocket error:", error);
+        toast.error("WebSocket connection error", { duration: 10000 });
+      };
 
       const pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "ping" }))
-          console.log("Sent ping to keep WebSocket alive")
+          ws.send(JSON.stringify({ type: "ping" }));
+          console.log("Sent ping to keep WebSocket alive");
         }
-      }, 30000)
+      }, 30000);
 
       return () => {
-        ws.close()
-        clearInterval(pingInterval)
-        setWebsocket(null)
-      }
+        ws.close();
+        clearInterval(pingInterval);
+        setWebsocket(null);
+      };
     }
-  }, [sessionId])
+  }, [sessionId]);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
-      const scrollElement = scrollAreaRef.current.querySelector(".scrollarea-viewport")
+      const scrollElement = scrollAreaRef.current.querySelector(".scrollarea-viewport");
       if (scrollElement) {
-        scrollElement.scrollTop = scrollElement.scrollHeight
+        scrollElement.scrollTop = scrollElement.scrollHeight;
       }
     }
-  }, [messages, isRecording])
+  }, [messages, isRecording]);
 
   useEffect(() => {
     return () => {
-      if (websocket) websocket.close()
-      if (processor) processor.disconnect()
-      if (audioContext) audioContext.close()
-      if (stream) stream.getTracks().forEach(track => track.stop())
-    }
-  }, [websocket, processor, audioContext, stream])
+      if (websocket) websocket.close();
+      if (processor) processor.disconnect();
+      if (audioContext) audioContext.close();
+      if (stream) stream.getTracks().forEach(track => track.stop());
+    };
+  }, [websocket, processor, audioContext, stream]);
 
   useEffect(() => {
-    const lastMessage = messages[messages.length - 1]
+    const lastMessage = messages[messages.length - 1];
     if (isVoiceMode && lastMessage?.role === "assistant" && lastMessage.audio_base64) {
-      const audio = new Audio(`data:audio/mp3;base64,${lastMessage.audio_base64}`)
-      audio.play().catch(() => toast.error("Audio playback failed.", { duration: 10000 }))
+      const audio = new Audio(`data:audio/mp3;base64,${lastMessage.audio_base64}`);
+      audio.play().catch(() => toast.error("Audio playback failed.", { duration: 10000 }));
     }
-  }, [messages, isVoiceMode])
+  }, [messages, isVoiceMode]);
 
   const startRecording = async () => {
     if (!isVoiceMode || !sessionId) {
-      toast.error("Voice mode is disabled or no session selected", { duration: 10000 })
-      return
+      toast.error("Voice mode is disabled or no session selected", { duration: 10000 });
+      return;
     }
-    setIsRecording(true)
-    setLiveTranscript("")
+    setIsRecording(true);
+    setLiveTranscript("");
     try {
-      const ws = new WebSocket(`ws://localhost:8000/transcribe/${sessionId}`)
-      setWebsocket(ws)
+      const ws = new WebSocket(`ws://localhost:8000/transcribe/${sessionId}`);
+      setWebsocket(ws);
 
       ws.onmessage = (event) => {
-        const transcript = event.data
-        console.log("Live transcript:", transcript)
-        setLiveTranscript(prev => prev + (prev ? " " : "") + transcript)
-      }
+        const transcript = event.data;
+        console.log("Live transcript:", transcript);
+        setLiveTranscript(prev => prev + (prev ? " " : "") + transcript);
+      };
 
       ws.onopen = async () => {
-        console.log("Transcription WebSocket connected")
+        console.log("Transcription WebSocket connected");
         try {
           const mediaStream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -270,142 +297,142 @@ function CandidateChat() {
               noiseSuppression: true,
               autoGainControl: true
             }
-          })
-          setStream(mediaStream)
-          const ctx = new AudioContext({ sampleRate: 16000 })
-          setAudioContext(ctx)
-          const source = ctx.createMediaStreamSource(mediaStream)
-          const proc = ctx.createScriptProcessor(4096, 1, 1)
-          setProcessor(proc)
+          });
+          setStream(mediaStream);
+          const ctx = new AudioContext({ sampleRate: 16000 });
+          setAudioContext(ctx);
+          const source = ctx.createMediaStreamSource(mediaStream);
+          const proc = ctx.createScriptProcessor(4096, 1, 1);
+          setProcessor(proc);
 
-          const analyser = ctx.createAnalyser()
-          analyser.fftSize = 2048
-          source.connect(analyser)
-          analyser.connect(proc)
-          proc.connect(ctx.destination)
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 2048;
+          source.connect(analyser);
+          analyser.connect(proc);
+          proc.connect(ctx.destination);
 
-          const dataArray = new Uint8Array(analyser.frequencyBinCount)
-          let silenceCount = 0
-          const silenceThreshold = 5
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          let silenceCount = 0;
+          const silenceThreshold = 5;
 
           const pingInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: "ping" }))
-              console.log("Sent ping to keep WebSocket alive")
+              ws.send(JSON.stringify({ type: "ping" }));
+              console.log("Sent ping to keep WebSocket alive");
             } else {
-              clearInterval(pingInterval)
-              console.log("Ping interval cleared due to WebSocket closure")
+              clearInterval(pingInterval);
+              console.log("Ping interval cleared due to WebSocket closure");
             }
-          }, 2000)
+          }, 2000);
 
           proc.onaudioprocess = (e) => {
             if (ws.readyState !== WebSocket.OPEN) {
-              console.log("WebSocket closed, stopping audio processing")
-              clearInterval(pingInterval)
-              proc.disconnect()
-              if (ctx) ctx.close()
-              if (mediaStream) mediaStream.getTracks().forEach(track => track.stop())
-              return
+              console.log("WebSocket closed, stopping audio processing");
+              clearInterval(pingInterval);
+              proc.disconnect();
+              if (ctx) ctx.close();
+              if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+              return;
             }
 
-            analyser.getByteFrequencyData(dataArray)
-            const maxAmplitude = Math.max(...dataArray)
+            analyser.getByteFrequencyData(dataArray);
+            const maxAmplitude = Math.max(...dataArray);
             if (maxAmplitude < 10) {
-              silenceCount++
-              console.warn(`Low audio amplitude detected (${maxAmplitude}), silence count: ${silenceCount}`)
+              silenceCount++;
+              console.warn(`Low audio amplitude detected (${maxAmplitude}), silence count: ${silenceCount}`);
               if (silenceCount >= silenceThreshold * (16000 / 4096)) {
-                console.error("Persistent silence detected, stopping recording")
-                ws.close(1000, "No audio input detected")
-                return
+                console.error("Persistent silence detected, stopping recording");
+                ws.close(1000, "No audio input detected");
+                return;
               }
             } else {
-              silenceCount = 0
-              console.debug(`Active audio detected, amplitude: ${maxAmplitude}`)
+              silenceCount = 0;
+              console.debug(`Active audio detected, amplitude: ${maxAmplitude}`);
             }
 
-            const inputData = e.inputBuffer.getChannelData(0)
+            const inputData = e.inputBuffer.getChannelData(0);
             if (inputData.every(val => val === 0)) {
-              console.warn("Empty audio buffer detected")
-              return
+              console.warn("Empty audio buffer detected");
+              return;
             }
-            const pcm16 = convertFloat32ToInt16(inputData)
-            console.debug(`Sending audio chunk of size ${pcm16.byteLength} bytes`)
+            const pcm16 = convertFloat32ToInt16(inputData);
+            console.debug(`Sending audio chunk of size ${pcm16.byteLength} bytes`);
             try {
-              ws.send(pcm16)
+              ws.send(pcm16);
             } catch (error) {
-              console.error("Error sending audio data:", error)
-              ws.close(1000, "Error sending audio data")
+              console.error("Error sending audio data:", error);
+              ws.close(1000, "Error sending audio data");
             }
-          }
-          toast.info("Recording started...", { duration: 5000 })
+          };
+          toast.info("Recording started...", { duration: 5000 });
         } catch (err) {
-          console.error("Recording setup error:", err)
-          toast.error(`Recording error: ${err instanceof Error ? err.message : String(err)}`, { duration: 10000 })
-          setIsRecording(false)
+          console.error("Recording setup error:", err);
+          toast.error(`Recording error: ${err instanceof Error ? err.message : String(err)}`, { duration: 10000 });
+          setIsRecording(false);
           if (ws.readyState === WebSocket.OPEN) {
-            ws.close(1000, "Recording setup failed")
+            ws.close(1000, "Recording setup failed");
           }
         }
-      }
+      };
 
       ws.onerror = (error) => {
-        console.error("Transcription WebSocket error:", error)
-        toast.error("WebSocket connection failed", { duration: 10000 })
-        setIsRecording(false)
+        console.error("Transcription WebSocket error:", error);
+        toast.error("WebSocket connection failed", { duration: 10000 });
+        setIsRecording(false);
         if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1000, "WebSocket error")
+          ws.close(1000, "WebSocket error");
         }
-      }
+      };
 
       ws.onclose = (event) => {
-        console.log(`Transcription WebSocket closed: code=${event.code}, reason=${event.reason || 'No reason provided'}`)
-        setIsRecording(false)
-        if (processor) processor.disconnect()
-        if (audioContext) audioContext.close()
-        if (stream) stream.getTracks().forEach(track => track.stop())
-        setWebsocket(null)
-        setProcessor(null)
-        setAudioContext(null)
-        setStream(null)
+        console.log(`Transcription WebSocket closed: code=${event.code}, reason=${event.reason || 'No reason provided'}`);
+        setIsRecording(false);
+        if (processor) processor.disconnect();
+        if (audioContext) audioContext.close();
+        if (stream) stream.getTracks().forEach(track => track.stop());
+        setWebsocket(null);
+        setProcessor(null);
+        setAudioContext(null);
+        setStream(null);
         if (event.code !== 1000) {
-          toast.error(`WebSocket closed unexpectedly: ${event.reason || 'No reason provided'}`, { duration: 10000 })
+          toast.error(`WebSocket closed unexpectedly: ${event.reason || 'No reason provided'}`, { duration: 10000 });
         } else if (liveTranscript.trim()) {
-          console.log("Final transcript:", liveTranscript)
-          handleSubmit(new Event('submit') as any, liveTranscript)
+          console.log("Final transcript:", liveTranscript);
+          handleSubmit(new Event('submit') as any, liveTranscript);
         } else {
-          toast.warning("No transcript received", { duration: 10000 })
+          toast.warning("No transcript received", { duration: 10000 });
         }
-      }
+      };
     } catch (err) {
-      console.error("WebSocket setup error:", err)
-      toast.error(`Recording error: ${err instanceof Error ? err.message : String(err)}`, { duration: 10000 })
-      setIsRecording(false)
+      console.error("WebSocket setup error:", err);
+      toast.error(`Recording error: ${err instanceof Error ? err.message : String(err)}`, { duration: 10000 });
+      setIsRecording(false);
     }
-  }
+  };
 
   const stopRecording = async () => {
     if (websocket && isRecording && websocket.readyState === WebSocket.OPEN) {
-      websocket.close(1000, "Recording stopped by user")
-      setIsRecording(false)
-      toast.info("Recording stopped, processing transcription...", { duration: 5000 })
+      websocket.close(1000, "Recording stopped by user");
+      setIsRecording(false);
+      toast.info("Recording stopped, processing transcription...", { duration: 5000 });
     }
-  }
+  };
 
   const convertFloat32ToInt16 = (buffer: Float32Array): ArrayBuffer => {
-    const l = buffer.length
-    const result = new Int16Array(l)
+    const l = buffer.length;
+    const result = new Int16Array(l);
     for (let i = 0; i < l; i++) {
-      result[i] = buffer[i] * 0x7fff
+      result[i] = buffer[i] * 0x7fff;
     }
-    return result.buffer
-  }
+    return result.buffer;
+  };
 
   const handleSubmit = async (e: React.FormEvent, overrideMessage?: string) => {
-    e.preventDefault()
-    if (isLoading || !sessionId) return
+    e.preventDefault();
+    if (isLoading || !sessionId) return;
 
-    setIsLoading(true)
-    const finalMessage = overrideMessage || message.trim()
+    setIsLoading(true);
+    const finalMessage = overrideMessage || message.trim();
 
     try {
       if (finalMessage) {
@@ -413,112 +440,104 @@ function CandidateChat() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query: finalMessage, voice_mode: isVoiceMode, role: "candidate" })
-        })
+        });
 
         if (!response.ok) {
-          const errorData = await response.json()
-          throw new Error(errorData.detail || "Failed to send message")
+          const errorData = await response.json();
+          throw new Error(errorData.detail || "Failed to send message");
         }
 
-        setMessage("")
-        setLiveTranscript("")
-        if (textareaRef.current) textareaRef.current.style.height = "auto"
+        setMessage("");
+        setLiveTranscript("");
+        if (textareaRef.current) textareaRef.current.style.height = "auto";
       }
     } catch (error) {
-      console.error("Error sending message:", error)
-      toast.error(`Failed to process request: ${error instanceof Error ? error.message : String(error)}`, { duration: 10000 })
+      console.error("Error sending message:", error);
+      toast.error(`Failed to process request: ${error instanceof Error ? error.message : String(error)}`, { duration: 10000 });
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
-  }
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      handleSubmit(e)
+      e.preventDefault();
+      handleSubmit(e);
     }
-  }
+  };
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setMessage(e.target.value)
-    const textarea = e.target
-    textarea.style.height = "auto"
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
-  }
+    setMessage(e.target.value);
+    const textarea = e.target;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  };
 
   const handleSuggestedQuestionClick = (question: string) => {
-    setMessage(question)
-    handleSubmit(new Event('submit') as any, question)
-  }
+    setMessage(question);
+    handleSubmit(new Event('submit') as any, question);
+  };
 
   const formatTime = (date: Date) => {
     return new Intl.DateTimeFormat('en-US', {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true
-    }).format(date)
-  }
+    }).format(date);
+  };
 
-  // Helper function to preprocess content for job descriptions
   const preprocessJobDescription = (content: string): string => {
-    // Handle "no documents" case
     if (content === "No documents available to answer your query. Please upload relevant documents or ask a location-based question.") {
-      return "I don't have the documents needed to answer your question right now. Could you upload any relevant files or try asking a location-based question? I'm here to help!"
+      return "I don't have the documents needed to answer your question right now. Could you upload any relevant files or try asking a location-based question? I'm here to help!";
     }
 
-    // Detect if the content is a job description list
     if (content.includes("**") && content.includes("1.")) {
-      // Add a friendly introduction
-      const intro = "Here's a clear overview of the available job roles:\n\n"
-      // Ensure bold syntax is preserved for ReactMarkdown
-      let formattedContent = content.replace(/\*\*(.*?)\*\*/g, '**$1**')
-      // Add spacing before numbered items
-      formattedContent = formattedContent.replace(/(\d+\.\s+)/g, '\n$1')
-      // Ensure job titles are bold and followed by a colon
+      const intro = "Here's a clear overview of the available job roles:\n\n";
+      let formattedContent = content.replace(/\*\*(.*?)\*\*/g, '**$1**');
+      formattedContent = formattedContent.replace(/(\d+\.\s+)/g, '\n$1');
       const lines = formattedContent.split('\n').map(line => {
         if (line.match(/^\d+\.\s+/)) {
-          return line.replace(/(\d+\.\s+)(.*?):/, '$1**$2**:')
+          return line.replace(/(\d+\.\s+)(.*?):/, '$1**$2**:');
         }
-        return line
-      })
-      return intro + lines.join('\n')
+        return line;
+      });
+      return intro + lines.join('\n');
     }
 
-    // For non-job-description content, preserve markdown
-    return content
-  }
+    return content;
+  };
 
   const renderMapData = (mapData: MapData) => {
     const getCityFromAddress = (address: string): string => {
-      const parts = address.split(",")
-      return parts.length > 2 ? parts[parts.length - 2].trim() : "Location"
-    }
+      const parts = address.split(",");
+      return parts.length > 2 ? parts[parts.length - 2].trim() : "Location";
+    };
 
     const renderStars = (rating: number | string | undefined) => {
-      if (!rating || rating === 'N/A') return null
-      const ratingNum = typeof rating === 'string' ? parseFloat(rating) : rating
-      if (isNaN(ratingNum)) return null
+      if (!rating || rating === 'N/A') return null;
+      const ratingNum = typeof rating === 'string' ? parseFloat(rating) : rating;
+      if (isNaN(ratingNum)) return null;
 
-      const fullStars = Math.floor(ratingNum)
-      const hasHalfStar = ratingNum % 1 >= 0.3
-      const stars = []
+      const fullStars = Math.floor(ratingNum);
+      const hasHalfStar = ratingNum % 1 >= 0.3;
+      const stars = [];
 
       for (let i = 0; i < 5; i++) {
         if (i < fullStars) {
-          stars.push(<Star key={i} className="h-4 w-4 text-yellow-500" fill="currentColor" />)
+          stars.push(<Star key={i} className="h-4 w-4 text-yellow-500" fill="currentColor" />);
         } else if (i === fullStars && hasHalfStar) {
           stars.push(
             <Star key={i} className="h-4 w-4 text-yellow-500" style={{ clipPath: 'inset(0 50% 0 0)' }} fill="currentColor" />
-          )
+          );
         } else {
-          stars.push(<Star key={i} className="h-4 w-4 text-gray-300" />)
+          stars.push(<Star key={i} className="h-4 w-4 text-gray-300" />);
         }
       }
-      return stars
-    }
+      return stars;
+    };
 
     const formatPriceLevel = (priceLevel: string | undefined) => {
-      if (!priceLevel || priceLevel === 'N/A') return null
+      if (!priceLevel || priceLevel === 'N/A') return null;
       const priceMap: { [key: string]: string } = {
         'Free': 'Free',
         'Inexpensive': '$',
@@ -529,9 +548,9 @@ function CandidateChat() {
         '$$': '$$',
         '$$$': '$$$',
         '$$$$': '$$$$'
-      }
-      return priceMap[priceLevel] || priceLevel
-    }
+      };
+      return priceMap[priceLevel] || priceLevel;
+    };
 
     switch (mapData.type) {
       case "address":
@@ -564,8 +583,7 @@ function CandidateChat() {
               </div>
             </div>
           </div>
-        )
-      
+        );
       case "nearby":
         return (
           <div className="mt-4 p-4 bg-muted rounded-xl shadow-sm border border-border">
@@ -624,7 +642,7 @@ function CandidateChat() {
               )}
             </ul>
           </div>
-        )
+        );
       case "distance":
         return (
           <div className="mt-4 p-4 bg-muted rounded-xl shadow-sm border border-border">
@@ -661,7 +679,7 @@ function CandidateChat() {
               </div>
             </div>
           </div>
-        )
+        );
       case "multi_location":
         return (
           <div className="mt-4 p-4 bg-muted rounded-xl shadow-sm border border-border">
@@ -696,11 +714,69 @@ function CandidateChat() {
               )}
             </ul>
           </div>
-        )
+        );
       default:
-        return null
+        return null;
     }
-  }
+  };
+
+  const renderMediaData = (mediaData: MediaData) => {
+    if (mediaData.type === "video") {
+      // Check if the URL is a YouTube link
+      if (mediaData.url.includes("youtube.com") || mediaData.url.includes("youtu.be")) {
+        // Convert watch URL to embed URL if necessary
+        let embedUrl = mediaData.url.replace("watch?v=", "embed/");
+        if (mediaData.url.includes("youtu.be")) {
+          const videoId = mediaData.url.split("youtu.be/")[1].split("?")[0];
+          embedUrl = `https://www.youtube.com/embed/${videoId}`;
+        }
+        return (
+          <iframe
+            src={embedUrl}
+            title="Company Video"
+            className="mt-3 w-full max-w-md h-64 rounded-md"
+            frameBorder="0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+            onError={() => {
+              console.error(`Failed to load YouTube video: ${mediaData.url}`);
+              toast.error("Failed to load company video", { duration: 5000 });
+            }}
+          />
+        );
+      }
+      return (
+        <video
+          controls
+          src={mediaData.url}
+          className="mt-3 w-full max-w-md rounded-md"
+          onError={() => {
+            console.error(`Failed to load video: ${mediaData.url}`);
+            toast.error("Failed to load company video", { duration: 5000 });
+          }}
+        />
+      );
+    } else if (mediaData.type === "image") {
+      return (
+        <img
+          src={mediaData.url}
+          alt="Related Image"
+          className="mt-3 w-24 h-24 object-cover rounded-md"
+          onError={() => {
+            console.error(`Failed to load media image: ${mediaData.url}`);
+            toast.error("Failed to load image", { duration: 5000 });
+          }}
+        />
+      );
+    }
+    return null;
+  };
+
+  const handleImageClick = (src: string, alt: string) => {
+    if (DEBUG) console.log(`Image clicked: src=${src}, alt=${alt}`);
+    setSelectedImage({ src, alt });
+    setIsDialogOpen(true);
+  };
 
   return (
     <div className="flex h-screen w-full flex-col">
@@ -775,6 +851,7 @@ function CandidateChat() {
                           <div className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
+                              rehypePlugins={[rehypeRaw]}
                               components={{
                                 h1: ({ node, ...props }) => <h1 className="text-lg font-bold mt-4 mb-2 text-foreground" {...props} />,
                                 h2: ({ node, ...props }) => <h2 className="text-base font-semibold mt-3 mb-2 text-foreground" {...props} />,
@@ -788,15 +865,58 @@ function CandidateChat() {
                                 a: ({ node, ...props }) => <a className="text-primary underline hover:text-primary/80 transition-colors" target="_blank" rel="noopener noreferrer" {...props} />,
                                 code: ({ node, ...props }) => <code className="bg-muted px-1 py-0.5 rounded text-sm text-foreground" {...props} />,
                                 pre: ({ node, ...props }) => <pre className="bg-muted p-3 rounded-lg overflow-x-auto text-sm text-foreground" {...props} />,
+                                img: ({ node, ...props }) => (
+                                  <Dialog open={isDialogOpen && selectedImage?.src === props.src} onOpenChange={(open) => {
+                                    if (DEBUG) console.log(`Dialog open state changed: ${open}`);
+                                    setIsDialogOpen(open);
+                                    if (!open) setSelectedImage(null);
+                                  }}>
+                                    <DialogTrigger asChild>
+                                      <img
+                                        {...props}
+                                        className="inline-block w-6 h-6 object-cover rounded-md ml-2 cursor-pointer hover:opacity-80 transition-opacity"
+                                        onClick={() => {
+                                          if (DEBUG) console.log(`Triggering dialog for image: ${props.src}`);
+                                          handleImageClick(props.src || '', props.alt || '');
+                                        }}
+                                        onError={() => {
+                                          console.error(`Failed to load inline image: ${props.src}`);
+                                          toast.error(`Failed to load image: ${props.alt || 'Dress item'}`, { duration: 5000 });
+                                        }}
+                                      />
+                                    </DialogTrigger>
+                                    <DialogContent className="sm:max-w-md bg-card border border-border rounded-lg shadow-lg transition-all duration-300">
+                                      <DialogHeader>
+                                        <DialogTitle className="text-lg font-semibold text-foreground">{selectedImage?.alt || 'Dress Item'}</DialogTitle>
+                                      </DialogHeader>
+                                      <div className="flex justify-center p-4">
+                                        {selectedImage?.src ? (
+                                          <img
+                                            src={selectedImage.src}
+                                            alt={selectedImage.alt || 'Dress Item'}
+                                            className="w-48 h-48 object-contain rounded-md"
+                                            onError={() => {
+                                              console.error(`Failed to load dialog image: ${selectedImage.src}`);
+                                              toast.error(`Failed to load image: ${selectedImage.alt || 'Dress item'}`, { duration: 5000 });
+                                            }}
+                                          />
+                                        ) : (
+                                          <p className="text-sm text-muted-foreground">No image available</p>
+                                        )}
+                                      </div>
+                                    </DialogContent>
+                                  </Dialog>
+                                ),
                               }}
                             >
-                              {preprocessJobDescription(message.content)}
+                              {DOMPurify.sanitize(preprocessJobDescription(message.content))}
                             </ReactMarkdown>
                           </div>
                           {message.audio_base64 && (
                             <audio controls src={`data:audio/mp3;base64,${message.audio_base64}`} className="mt-3 w-full rounded-md" />
                           )}
                           {message.map_data && renderMapData(message.map_data)}
+                          {message.media_data && renderMediaData(message.media_data)}
                         </div>
                       </div>
                       <div className="flex items-center justify-between">
@@ -876,7 +996,7 @@ function CandidateChat() {
         </div>
       </div>
     </div>
-  )
+  );
 }
 
-export default CandidateChat
+export default CandidateChat;

@@ -1,3 +1,5 @@
+// Updated chatmessages.tsx
+
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -16,6 +18,11 @@ interface MapData {
   llm_response?: string;
 }
 
+interface MediaData {
+  type: "video" | "image"
+  url: string
+}
+
 interface Message {
   id: string;
   role: "user" | "assistant" | "system" | "hr" | "candidate";
@@ -23,6 +30,7 @@ interface Message {
   timestamp: Date;
   audio_base64?: string;
   map_data?: MapData;
+  media_data?: MediaData;
 }
 
 interface ChatMessagesProps {
@@ -77,6 +85,9 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
     "Can you tell me more about the team I'll be working with?",
     "What benefits does the company offer?",
     "What is the expected start date?",
+    "Show me the company video",
+    "What is the dress code?",
+    "Who is the chairman?"
   ];
 
   const handleCopy = (content: string) => {
@@ -310,6 +321,19 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
     }
   };
 
+  const renderMediaData = (mediaData: MediaData) => {
+    if (mediaData.type === "video") {
+      return (
+        <video controls src={mediaData.url} className="mt-3 w-full max-w-md rounded-md" />
+      )
+    } else if (mediaData.type === "image") {
+      return (
+        <img src={mediaData.url} alt="Related Image" className="mt-3 w-full max-w-md rounded-md" />
+      )
+    }
+    return null
+  }
+
   // Helper function to preprocess content for job descriptions and remove markdown symbols
   const preprocessJobDescription = (content: string): string => {
     // Handle "no documents" case
@@ -423,6 +447,7 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
                           <audio controls src={`data:audio/mp3;base64,${message.audio_base64}`} className="mt-3 w-full rounded-md" />
                         )}
                         {message.map_data && renderMapData(message.map_data)}
+                        {message.media_data && renderMediaData(message.media_data)}
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
