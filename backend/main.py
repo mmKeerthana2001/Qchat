@@ -1,4 +1,3 @@
-
 import os
 import asyncio
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, WebSocket, WebSocketDisconnect, Depends
@@ -18,13 +17,9 @@ from pydantic import BaseModel
 import io
 import uuid
 import re
-import boto3
 import traceback
 import base64
 from pymongo import MongoClient
-from amazon_transcribe.client import TranscribeStreamingClient
-from amazon_transcribe.handlers import TranscriptResultStreamHandler
-from amazon_transcribe.model import TranscriptEvent
 from dotenv import load_dotenv
 import pathlib
 from datetime import datetime
@@ -33,6 +28,10 @@ from googlemaps.exceptions import ApiError
 import urllib.parse
 from rapidfuzz import process, fuzz
 import requests
+from pydub import AudioSegment
+from openai import AsyncOpenAI
+from pymongo.errors import CollectionInvalid
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type  # Add tenacity imports
 
 import math
  
@@ -40,18 +39,14 @@ load_dotenv()
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-AWS_POLLY_VOICE_ID = os.getenv("AWS_POLLY_VOICE_ID", "Joanna")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
- 
-polly = boto3.client(
-    'polly',
-    region_name=AWS_REGION,
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-)
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
+ELEVENLABS_MODEL_ID_STT = os.getenv("ELEVENLABS_MODEL_ID_STT", "scribe_v1")
+ELEVENLABS_MODEL_ID_TTS = os.getenv("ELEVENLABS_MODEL_ID_TTS", "eleven_multilingual_v2")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
  
 session_storage = {}
-transcribe_client = TranscribeStreamingClient(region=AWS_REGION)
  
 gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY) if GOOGLE_MAPS_API_KEY else None
  
@@ -71,6 +66,7 @@ class DebugMiddleware(BaseHTTPMiddleware):
  
 app = FastAPI()
 app.add_middleware(DebugMiddleware)
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
  
 app.add_middleware(
     CORSMiddleware,
@@ -118,7 +114,6 @@ async def verify_session(credentials: HTTPAuthorizationCredentials = Depends(sec
 class QueryRequest(BaseModel):
     query: str
     role: str
-    voice_mode: bool = False
  
 class SessionRequest(BaseModel):
     candidate_name: str
@@ -133,18 +128,6 @@ def is_valid_uuid(value: str) -> bool:
         re.IGNORECASE
     )
     return bool(uuid_pattern.match(value))
- 
-class MyEventHandler(TranscriptResultStreamHandler):
-    def __init__(self, stream, websocket: WebSocket):
-        super().__init__(stream)
-        self.websocket = websocket
- 
-    async def handle_transcript_event(self, transcript_event: TranscriptEvent):
-        for result in transcript_event.transcript.results:
-            for alt in result.alternatives:
-                text = alt.transcript
-                if text.strip():
-                    await self.websocket.send_text(text)
  
 @app.get("/login")
 async def initiate_login():
@@ -414,20 +397,12 @@ async def validate_token(token: str):
         logger.error(f"Unexpected error validating token {token}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error validating token: {str(e)}")
 
-# Updated main.py endpoint
-@app.post("/chat/{session_id}")
-async def chat_with_documents(session_id: str, query_req: QueryRequest):
+async def process_chat_query(session_id: str, query_req: QueryRequest):
     try:
-        if not is_valid_uuid(session_id):
-            raise HTTPException(status_code=400, detail="Invalid session_id format. Must be a valid UUID.")
-       
-        start_time = time.time()
-        logger.info(f"Received chat query for session {session_id}: {query_req.query} by {query_req.role}")
- 
         session = await context_manager.get_session(session_id)
         history = session.get("chat_history", [])
         query_corrected = await agent.correct_query(query_req.query, history, query_req.role)
- 
+
         agent_instance = Agent()
         intent_data = await agent_instance.classify_intent_and_extract(query_corrected, history, query_req.role)
 
@@ -439,8 +414,7 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
             try:
                 map_data = await handle_map_query(session_id, QueryRequest(
                     query=query_corrected,
-                    role=query_req.role,
-                    voice_mode=query_req.voice_mode
+                    role=query_req.role
                 ), intent_data)
                 response, history = await context_manager.process_map_query(session_id, query_corrected, query_req.role, map_data, intent_data)
             except Exception as e:
@@ -478,7 +452,24 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
             else:
                 response, media_data, history = await context_manager.process_query(session_id, query_corrected, query_req.role, intent_data=intent_data)
                 logger.debug(f"Non-map query processed, media_data: {media_data}")
+
+        return response, map_data, media_data, history, is_map_query
+    except Exception as e:
+        logger.error(f"Error in process_chat_query: {str(e)}")
+        raise
+
+# Updated main.py endpoint
+@app.post("/chat/{session_id}")
+async def chat_with_documents(session_id: str, query_req: QueryRequest):
+    try:
+        if not is_valid_uuid(session_id):
+            raise HTTPException(status_code=400, detail="Invalid session_id format. Must be a valid UUID.")
        
+        start_time = time.time()
+        logger.info(f"Received chat query for session {session_id}: {query_req.query} by {query_req.role}")
+
+        response, map_data, media_data, history, is_map_query = await process_chat_query(session_id, query_req)
+
         if session_id in websocket_connections:
             for ws in websocket_connections[session_id]:
                 try:
@@ -501,7 +492,7 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
                 except Exception as e:
                     logger.error(f"WebSocket error for session {session_id}: {str(e)}")
                     websocket_connections[session_id].remove(ws)
- 
+
         response_data = {
             "response": response,
             "history": history
@@ -509,22 +500,6 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
         if not is_map_query and media_data:
             response_data["media_data"] = media_data
             logger.debug(f"Including media_data in HTTP response: {media_data}")
-        if query_req.voice_mode:
-            if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
-                raise HTTPException(status_code=500, detail="AWS credentials not configured")
-            try:
-                synth_response = polly.synthesize_speech(
-                    Text=response,
-                    OutputFormat='mp3',
-                    VoiceId=AWS_POLLY_VOICE_ID,
-                    Engine='neural'
-                )
-                audio_data = synth_response['AudioStream'].read()
-                response_data['audio_base64'] = base64.b64encode(audio_data).decode('utf-8')
-                logger.info(f"Generated audio for session {session_id}")
-            except Exception as e:
-                logger.error(f"Polly TTS error for session {session_id}: {str(e)}")
-                response_data['audio_base64'] = None
        
         logger.info(f"Chat processing time: {time.time() - start_time:.2f} seconds")
         return JSONResponse(content=response_data)
@@ -1016,45 +991,189 @@ async def websocket_endpoint(session_id: str, websocket: WebSocket):
         if not websocket_connections[session_id]:
             del websocket_connections[session_id]
         await websocket.close(code=1011, reason=str(e))
- 
-@app.websocket("/transcribe/{session_id}")
-async def transcribe_websocket(session_id: str, websocket: WebSocket):
-    if not is_valid_uuid(session_id):
-        await websocket.close(code=1008, reason="Invalid session_id format")
-        return
-   
-    await websocket.accept()
-    logger.info(f"Transcription WebSocket connection accepted for session {session_id}")
- 
+
+# import httpx
+# from fastapi.staticfiles import StaticFiles
+# app.mount("/static", StaticFiles(directory="static"), name="static")
+# PRELIMINARY_AUDIO_URL = "http://localhost:8000/static/preliminary_response.mp3"
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(requests.HTTPError),
+    before_sleep=lambda retry_state: logger.debug(f"Retrying STT request, attempt {retry_state.attempt_number} after {retry_state.next_action.sleep}s")
+)
+def send_stt_request(audio_filename, mp3_bytes):
+    stt_url = "https://api.elevenlabs.io/v1/speech-to-text"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY
+    }
+    files = {
+        "file": (audio_filename, mp3_bytes, "audio/mp3"),
+        "model_id": (None, ELEVENLABS_MODEL_ID_STT)
+    }
+    response = requests.post(stt_url, headers=headers, files=files)
+    response.raise_for_status()
+    return response.json()
+
+async def generate_fallback_response(query: str):
+    """Generate a fallback response using OpenAI GPT for general queries."""
     try:
-        stream = await transcribe_client.start_stream_transcription(
-            language_code="en-US",
-            media_sample_rate_hz=16000,
-            media_encoding="pcm"
+        completion = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant responding to general queries in a conversational and professional tone."},
+                {"role": "user", "content": query}
+            ],
+            max_tokens=150
         )
-        handler = MyEventHandler(stream, websocket)
- 
-        async def receive_audio():
-            try:
-                while True:
-                    data = await websocket.receive_bytes()
-                    await stream.input_stream.send_audio_event(audio_chunk=data)
-            except WebSocketDisconnect:
-                logger.info(f"Transcription WebSocket disconnected for session {session_id}")
-            except Exception as e:
-                logger.error(f"Error receiving audio for session {session_id}: {str(e)}")
-                await stream.input_stream.end_stream()
- 
-        async def process_transcription():
-            try:
-                await handler.handle_events()
-            except Exception as e:
-                logger.error(f"Error processing transcription for session {session_id}: {str(e)}")
-                await stream.input_stream.end_stream()
- 
-        await asyncio.gather(receive_audio(), process_transcription())
+        return completion.choices[0].message.content
     except Exception as e:
-        logger.error(f"Transcription WebSocket error for session {session_id}: {str(e)}")
-        await websocket.close(code=1011, reason=str(e))
-    finally:
-        await websocket.close(code=1000, reason="Transcription completed")
+        logger.error(f"Fallback GPT response error: {str(e)}")
+        return "I'm sorry, I couldn't process your query at the moment. Please try again."
+
+@app.post("/voice/{session_id}")
+async def voice_endpoint(session_id: str, audio: UploadFile = File(...)):
+    try:
+        if not ELEVENLABS_API_KEY:
+            raise HTTPException(status_code=500, detail="ElevenLabs API key not configured")
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+        if not is_valid_uuid(session_id):
+            raise HTTPException(status_code=400, detail="Invalid session_id format. Must be a valid UUID.")
+
+        # Read audio file
+        audio_bytes = await audio.read()
+        logger.debug(f"Received audio file: {audio.filename}, size: {len(audio_bytes)} bytes")
+
+        # Convert webm to mp3
+        audio_io = io.BytesIO(audio_bytes)
+        try:
+            audio_segment = AudioSegment.from_file(audio_io, format="webm")
+            mp3_io = io.BytesIO()
+            audio_segment.export(mp3_io, format="mp3")
+            mp3_bytes = mp3_io.getvalue()
+            logger.debug("Converted webm to mp3 successfully")
+        except Exception as e:
+            logger.error(f"Audio conversion error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error converting audio: {str(e)}")
+
+        # Speech to Text
+        try:
+            transcript_data = send_stt_request(audio.filename, mp3_bytes)
+            transcript = transcript_data.get("text")
+            if not transcript:
+                raise HTTPException(status_code=400, detail="No transcript generated from audio")
+            logger.info(f"STT successful, transcript: {transcript}")
+        except requests.HTTPError as e:
+            if e.response.status_code == 429:
+                logger.error(f"STT API rate limit exceeded: {e.response.text}")
+                raise HTTPException(
+                    status_code=429,
+                    detail="The speech-to-text service is currently busy. Please try again later."
+                )
+            logger.error(f"STT API error: {str(e)}, Response: {e.response.text}")
+            raise HTTPException(status_code=500, detail=f"STT API error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected STT error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Unexpected STT error: {str(e)}")
+
+        # Initialize database collection if it doesn't exist
+        collection_name = f"docs_{session_id}"
+        try:
+            await context_manager.db.create_collection(collection_name)
+            logger.debug(f"Created collection {collection_name}")
+        except CollectionInvalid:
+            logger.debug(f"Collection {collection_name} already exists or creation not needed")
+
+        # Process query with fallback
+        response = None
+        map_data = None
+        media_data = None
+        is_map_query = False
+        history = []
+        try:
+            query_req = QueryRequest(query=transcript, role="candidate")
+            response, map_data, media_data, history, is_map_query = await process_chat_query(session_id, query_req)
+            logger.debug(f"Query processed, response: {response}, is_map_query: {is_map_query}")
+        except Exception as e:
+            logger.error(f"Query processing failed: {str(e)}")
+            # Fallback to GPT for general queries
+            response = await generate_fallback_response(transcript)
+            history = [{"role": "candidate", "content": transcript, "timestamp": time.time()},
+                       {"role": "assistant", "content": response, "timestamp": time.time()}]
+            logger.info(f"Fallback response generated: {response}")
+
+        # Add to history
+        history[-1]["audio_base64"] = None  # Will add TTS audio later
+
+        # Update session with new history
+        session_collection = f"sessions_{session_id}"
+        await context_manager.db[session_collection].update_one(
+            {"session_id": session_id},
+            {"$set": {"chat_history": history[-10:], "updated_at": time.time()}},
+            upsert=True
+        )
+        logger.debug(f"Session {session_id} updated with new history")
+
+        # Text to Speech for main response
+        tts_text = response
+        tts_url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+        tts_headers = {
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json",
+            "Accept": "audio/mp3"
+        }
+        tts_payload = {
+            "text": tts_text,
+            "model_id": ELEVENLABS_MODEL_ID_TTS,
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.5
+            }
+        }
+        try:
+            tts_response = requests.post(tts_url, headers=tts_headers, json=tts_payload)
+            tts_response.raise_for_status()
+            audio_bytes = tts_response.content
+            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+            logger.info("Main TTS successful, audio generated")
+        except requests.RequestException as e:
+            logger.error(f"TTS API error: {str(e)}, Response: {tts_response.text}")
+            raise HTTPException(status_code=500, detail=f"TTS API error: {str(e)}")
+
+        # Broadcast via WebSocket
+        if session_id in websocket_connections:
+            for ws in websocket_connections[session_id]:
+                try:
+                    # Send main response
+                    ws_response = {
+                        "role": "assistant",
+                        "content": response,
+                        "timestamp": time.time(),
+                        "audio_base64": audio_base64,
+                        "is_preliminary": False
+                    }
+                    if is_map_query:
+                        ws_response["map_data"] = map_data
+                    if media_data:
+                        ws_response["media_data"] = media_data
+                    await ws.send_json(ws_response)
+                    logger.debug(f"WebSocket message sent for session {session_id}")
+                except Exception as e:
+                    logger.error(f"WebSocket broadcast error for session {session_id}: {str(e)}")
+                    websocket_connections[session_id].remove(ws)
+
+        return JSONResponse(content={
+            "transcript": transcript,
+            "response": response,
+            "audio_base64": audio_base64,
+            "map_data": map_data if is_map_query else None,
+            "media_data": media_data if not is_map_query else None
+        })
+    except HTTPException as e:
+        logger.error(f"HTTPException in voice endpoint for session {session_id}: {e.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"Error in voice endpoint for session {session_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing voice query: {str(e)}")
