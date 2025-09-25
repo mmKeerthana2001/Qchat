@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -50,12 +49,10 @@ function CandidateChat() {
   const [message, setMessage] = useState("");
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [liveTranscript, setLiveTranscript] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [websocket, setWebsocket] = useState<WebSocket | null>(null);
-  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
-  const [processor, setProcessor] = useState<ScriptProcessorNode | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
   const [selectedImage, setSelectedImage] = useState<{ src: string; alt: string } | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -179,38 +176,93 @@ function CandidateChat() {
             console.log("Received pong, WebSocket alive");
             return;
           }
-          const newMessage: Message = {
-            id: crypto.randomUUID(),
-            role: data.role,
-            content: data.content,
-            timestamp: new Date(data.timestamp * 1000),
-            audio_base64: data.audio_base64,
-            map_data: data.map_data ? {
-              type: data.map_data.type,
-              data: data.map_data.data,
-              map_url: data.map_data.map_url,
-              static_map_url: data.map_data.static_map_url,
-              coordinates: data.map_data.coordinates
-            } : undefined,
-            media_data: data.media_data ? {
-              type: data.media_data.type,
-              url: data.media_data.url
-            } : undefined
-          };
-          setMessages(prev => {
-            const isDuplicate = prev.some(
-              msg =>
-                msg.role === newMessage.role &&
-                msg.content === newMessage.content &&
-                Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 500
-            );
-            if (isDuplicate) {
-              console.log("Duplicate WebSocket message ignored:", data);
-              return prev;
+
+          // For voice mode, only play audio and show map/media data if present
+          if (isVoiceMode && data.audio_base64) {
+            const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`);
+            audio.play().catch((err) => {
+              console.error("Audio playback error:", err);
+              toast.error(`Audio playback failed: ${err.message}`, { duration: 10000 });
+            });
+
+            // Add message to UI only if it has map_data or media_data
+            if (data.map_data || data.media_data) {
+              const newMessage: Message = {
+                id: crypto.randomUUID(),
+                role: data.role,
+                content: data.content,
+                timestamp: new Date(data.timestamp * 1000),
+                audio_base64: data.audio_base64,
+                map_data: data.map_data ? {
+                  type: data.map_data.type,
+                  data: data.map_data.data,
+                  map_url: data.map_data.map_url,
+                  static_map_url: data.map_data.static_map_url,
+                  coordinates: data.map_data.coordinates
+                } : undefined,
+                media_data: data.media_data ? {
+                  type: data.media_data.type,
+                  url: data.media_data.url
+                } : undefined
+              };
+              setMessages(prev => {
+                const isDuplicate = prev.some(
+                  msg =>
+                    msg.role === newMessage.role &&
+                    msg.content === newMessage.content &&
+                    Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 500
+                );
+                if (isDuplicate) {
+                  console.log("Duplicate WebSocket message ignored:", data);
+                  return prev;
+                }
+                return [...prev, newMessage];
+              });
+              toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 });
             }
-            return [...prev, newMessage];
-          });
-          toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 });
+          } else {
+            // For text mode, add all messages to UI
+            const newMessage: Message = {
+              id: crypto.randomUUID(),
+              role: data.role,
+              content: data.content,
+              timestamp: new Date(data.timestamp * 1000),
+              audio_base64: data.audio_base64,
+              map_data: data.map_data ? {
+                type: data.map_data.type,
+                data: data.map_data.data,
+                map_url: data.map_data.map_url,
+                static_map_url: data.map_data.static_map_url,
+                coordinates: data.map_data.coordinates
+              } : undefined,
+              media_data: data.media_data ? {
+                type: data.media_data.type,
+                url: data.media_data.url
+              } : undefined
+            };
+            setMessages(prev => {
+              const isDuplicate = prev.some(
+                msg =>
+                  msg.role === newMessage.role &&
+                  msg.content === newMessage.content &&
+                  Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 500
+              );
+              if (isDuplicate) {
+                console.log("Duplicate WebSocket message ignored:", data);
+                return prev;
+              }
+              return [...prev, newMessage];
+            });
+            toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 });
+
+            if (data.audio_base64) {
+              const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`);
+              audio.play().catch((err) => {
+                console.error("Audio playback error:", err);
+                toast.error(`Audio playback failed: ${err.message}`, { duration: 10000 });
+              });
+            }
+          }
         } catch (error) {
           console.error("Error parsing WebSocket message:", error);
           toast.error("Failed to process incoming message", { duration: 5000 });
@@ -240,7 +292,7 @@ function CandidateChat() {
         setWebsocket(null);
       };
     }
-  }, [sessionId]);
+  }, [sessionId, isVoiceMode]);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -254,19 +306,10 @@ function CandidateChat() {
   useEffect(() => {
     return () => {
       if (websocket) websocket.close();
-      if (processor) processor.disconnect();
-      if (audioContext) audioContext.close();
       if (stream) stream.getTracks().forEach(track => track.stop());
+      if (recorder) recorder.stop();
     };
-  }, [websocket, processor, audioContext, stream]);
-
-  useEffect(() => {
-    const lastMessage = messages[messages.length - 1];
-    if (isVoiceMode && lastMessage?.role === "assistant" && lastMessage.audio_base64) {
-      const audio = new Audio(`data:audio/mp3;base64,${lastMessage.audio_base64}`);
-      audio.play().catch(() => toast.error("Audio playback failed.", { duration: 10000 }));
-    }
-  }, [messages, isVoiceMode]);
+  }, [websocket, stream, recorder]);
 
   const startRecording = async () => {
     if (!isVoiceMode || !sessionId) {
@@ -274,158 +317,104 @@ function CandidateChat() {
       return;
     }
     setIsRecording(true);
-    setLiveTranscript("");
     try {
-      const ws = new WebSocket(`ws://localhost:8000/transcribe/${sessionId}`);
-      setWebsocket(ws);
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setStream(mediaStream);
 
-      ws.onmessage = (event) => {
-        const transcript = event.data;
-        console.log("Live transcript:", transcript);
-        setLiveTranscript(prev => prev + (prev ? " " : "") + transcript);
-      };
-
-      ws.onopen = async () => {
-        console.log("Transcription WebSocket connected");
-        try {
-          const mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              sampleRate: 16000,
-              sampleSize: 16,
-              channelCount: 1,
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }
-          });
-          setStream(mediaStream);
-          const ctx = new AudioContext({ sampleRate: 16000 });
-          setAudioContext(ctx);
-          const source = ctx.createMediaStreamSource(mediaStream);
-          const proc = ctx.createScriptProcessor(4096, 1, 1);
-          setProcessor(proc);
-
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 2048;
-          source.connect(analyser);
-          analyser.connect(proc);
-          proc.connect(ctx.destination);
-
-          const dataArray = new Uint8Array(analyser.frequencyBinCount);
-          let silenceCount = 0;
-          const silenceThreshold = 5;
-
-          const pingInterval = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: "ping" }));
-              console.log("Sent ping to keep WebSocket alive");
-            } else {
-              clearInterval(pingInterval);
-              console.log("Ping interval cleared due to WebSocket closure");
-            }
-          }, 2000);
-
-          proc.onaudioprocess = (e) => {
-            if (ws.readyState !== WebSocket.OPEN) {
-              console.log("WebSocket closed, stopping audio processing");
-              clearInterval(pingInterval);
-              proc.disconnect();
-              if (ctx) ctx.close();
-              if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
-              return;
-            }
-
-            analyser.getByteFrequencyData(dataArray);
-            const maxAmplitude = Math.max(...dataArray);
-            if (maxAmplitude < 10) {
-              silenceCount++;
-              console.warn(`Low audio amplitude detected (${maxAmplitude}), silence count: ${silenceCount}`);
-              if (silenceCount >= silenceThreshold * (16000 / 4096)) {
-                console.error("Persistent silence detected, stopping recording");
-                ws.close(1000, "No audio input detected");
-                return;
-              }
-            } else {
-              silenceCount = 0;
-              console.debug(`Active audio detected, amplitude: ${maxAmplitude}`);
-            }
-
-            const inputData = e.inputBuffer.getChannelData(0);
-            if (inputData.every(val => val === 0)) {
-              console.warn("Empty audio buffer detected");
-              return;
-            }
-            const pcm16 = convertFloat32ToInt16(inputData);
-            console.debug(`Sending audio chunk of size ${pcm16.byteLength} bytes`);
-            try {
-              ws.send(pcm16);
-            } catch (error) {
-              console.error("Error sending audio data:", error);
-              ws.close(1000, "Error sending audio data");
-            }
-          };
-          toast.info("Recording started...", { duration: 5000 });
-        } catch (err) {
-          console.error("Recording setup error:", err);
-          toast.error(`Recording error: ${err instanceof Error ? err.message : String(err)}`, { duration: 10000 });
-          setIsRecording(false);
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.close(1000, "Recording setup failed");
-          }
+      // Determine supported MIME type
+      const supportedMimeTypes = ['audio/webm', 'audio/ogg', 'audio/wav'];
+      let selectedMimeType = 'audio/webm'; // Default to webm
+      for (const mimeType of supportedMimeTypes) {
+        if (MediaRecorder.isTypeSupported(mimeType)) {
+          selectedMimeType = mimeType;
+          break;
         }
-      };
+      }
 
-      ws.onerror = (error) => {
-        console.error("Transcription WebSocket error:", error);
-        toast.error("WebSocket connection failed", { duration: 10000 });
-        setIsRecording(false);
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1000, "WebSocket error");
-        }
-      };
+      if (!MediaRecorder.isTypeSupported(selectedMimeType)) {
+        throw new Error("No supported audio MIME types available for recording");
+      }
 
-      ws.onclose = (event) => {
-        console.log(`Transcription WebSocket closed: code=${event.code}, reason=${event.reason || 'No reason provided'}`);
-        setIsRecording(false);
-        if (processor) processor.disconnect();
-        if (audioContext) audioContext.close();
-        if (stream) stream.getTracks().forEach(track => track.stop());
-        setWebsocket(null);
-        setProcessor(null);
-        setAudioContext(null);
-        setStream(null);
-        if (event.code !== 1000) {
-          toast.error(`WebSocket closed unexpectedly: ${event.reason || 'No reason provided'}`, { duration: 10000 });
-        } else if (liveTranscript.trim()) {
-          console.log("Final transcript:", liveTranscript);
-          handleSubmit(new Event('submit') as any, liveTranscript);
-        } else {
-          toast.warning("No transcript received", { duration: 10000 });
-        }
-      };
+      const rec = new MediaRecorder(mediaStream, { mimeType: selectedMimeType });
+      setRecorder(rec);
+      rec.start();
+      toast.info("Recording started...", { duration: 5000 });
+      if (DEBUG) console.log(`Recording started with MIME type: ${selectedMimeType}`);
     } catch (err) {
-      console.error("WebSocket setup error:", err);
+      console.error("Recording setup error:", err);
       toast.error(`Recording error: ${err instanceof Error ? err.message : String(err)}`, { duration: 10000 });
       setIsRecording(false);
     }
   };
 
-  const stopRecording = async () => {
-    if (websocket && isRecording && websocket.readyState === WebSocket.OPEN) {
-      websocket.close(1000, "Recording stopped by user");
+  const stopRecording = () => {
+    if (recorder && isRecording) {
+      recorder.stop();
       setIsRecording(false);
-      toast.info("Recording stopped, processing transcription...", { duration: 5000 });
+      toast.info("Recording stopped, processing...", { duration: 5000 });
     }
   };
 
-  const convertFloat32ToInt16 = (buffer: Float32Array): ArrayBuffer => {
-    const l = buffer.length;
-    const result = new Int16Array(l);
-    for (let i = 0; i < l; i++) {
-      result[i] = buffer[i] * 0x7fff;
+  useEffect(() => {
+    if (recorder) {
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => chunks.push(e.data);
+      recorder.onstop = async () => {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const formData = new FormData();
+        formData.append('audio', blob, 'recording.webm');
+
+        setIsLoading(true);
+        try {
+          const response = await fetch(`http://localhost:8000/voice/${sessionId}`, {
+            method: "POST",
+            body: formData,
+          });
+          if (!response.ok) {
+            const errorData = await response.json();
+            if (response.status === 429) {
+              throw new Error("The speech-to-text service is currently busy. Please try again later.");
+            }
+            throw new Error(errorData.detail || `HTTP error ${response.status}`);
+          }
+          const data = await response.json();
+
+          // Play main response audio
+          if (data.audio_base64) {
+            const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`);
+            audio.play().catch((err) => {
+              console.error("Main audio playback error:", err);
+              toast.error(`Audio playback failed: ${err.message}`, { duration: 10000 });
+            });
+          }
+
+          // Add message to UI only if it has map_data or media_data
+          if (data.map_data || data.media_data) {
+            const newMessage: Message = {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: data.response,
+              timestamp: new Date(),
+              audio_base64: data.audio_base64,
+              map_data: data.map_data,
+              media_data: data.media_data
+            };
+            setMessages((prev) => [...prev, newMessage]);
+          }
+        } catch (error) {
+          console.error("Error processing voice:", error);
+          toast.error(`Failed to process voice input: ${error instanceof Error ? error.message : String(error)}`, { duration: 10000 });
+        } finally {
+          setIsLoading(false);
+          if (stream) {
+            stream.getTracks().forEach((track) => track.stop());
+          }
+          setStream(null);
+          setRecorder(null);
+        }
+      };
     }
-    return result.buffer;
-  };
+  }, [recorder, sessionId, stream]);
 
   const handleSubmit = async (e: React.FormEvent, overrideMessage?: string) => {
     e.preventDefault();
@@ -439,7 +428,7 @@ function CandidateChat() {
         const response = await fetch(`http://localhost:8000/chat/${sessionId}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: finalMessage, voice_mode: isVoiceMode, role: "candidate" })
+          body: JSON.stringify({ query: finalMessage, role: "candidate" })
         });
 
         if (!response.ok) {
@@ -448,7 +437,6 @@ function CandidateChat() {
         }
 
         setMessage("");
-        setLiveTranscript("");
         if (textareaRef.current) textareaRef.current.style.height = "auto";
       }
     } catch (error) {
@@ -722,12 +710,10 @@ function CandidateChat() {
 
   const renderMediaData = (mediaData: MediaData) => {
     if (mediaData.type === "video") {
-      // Check if the URL is a YouTube link
       if (mediaData.url.includes("youtube.com") || mediaData.url.includes("youtu.be")) {
-        // Convert watch URL to embed URL if necessary
         let embedUrl = mediaData.url.replace("watch?v=", "embed/");
         if (mediaData.url.includes("youtu.be")) {
-          const videoId = mediaData.url.split("youtu.be/")[1].split("?")[0];
+          const videoId = mediaData.url.split("youtu.be/")[1].split("?")[0].split("?")[0];
           embedUrl = `https://www.youtube.com/embed/${videoId}`;
         }
         return (
@@ -897,7 +883,7 @@ function CandidateChat() {
                                             className="w-48 h-48 object-contain rounded-md"
                                             onError={() => {
                                               console.error(`Failed to load dialog image: ${selectedImage.src}`);
-                                              toast.error(`Failed to load image: ${selectedImage.alt || 'Dress item'}`, { duration: 5000 });
+                                              toast.error(`Failed to load image: ${selectedImage.alt || 'Dress item'}`, { duration: 5005 });
                                             }}
                                           />
                                         ) : (
@@ -935,7 +921,7 @@ function CandidateChat() {
               <div className="flex flex-col items-end max-w-[70%]">
                 <div className="chat-bubble-candidate rounded-2xl rounded-tr-md px-4 py-3 mb-2 bg-muted/50 animate-pulse">
                   <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                    {liveTranscript || "Listening..."}
+                    Listening...
                   </p>
                 </div>
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -958,12 +944,12 @@ function CandidateChat() {
             <div className="flex-1">
               <Textarea
                 ref={textareaRef}
-                value={liveTranscript || message}
+                value={message}
                 onChange={handleTextareaChange}
                 onKeyDown={handleKeyDown}
-                placeholder={isRecording ? "Transcribing..." : "Type your message..."}
+                placeholder={isVoiceMode ? "Voice mode active - use mic button" : "Type your message..."}
                 className="min-h-[40px] max-h-[200px] resize-none"
-                disabled={isRecording || isLoading}
+                disabled={isVoiceMode || isRecording || isLoading}
               />
             </div>
             {isVoiceMode && (
@@ -984,7 +970,7 @@ function CandidateChat() {
             <Button
               type="submit"
               size="icon"
-              disabled={isLoading || isRecording || (!message.trim() && !liveTranscript.trim())}
+              disabled={isLoading || isRecording || !message.trim()}
             >
               {isLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
