@@ -177,91 +177,49 @@ function CandidateChat() {
             return;
           }
 
-          // For voice mode, only play audio and show map/media data if present
+          // Create new message for all assistant responses
+          const newMessage: Message = {
+            id: crypto.randomUUID(),
+            role: data.role,
+            content: data.content,
+            timestamp: new Date(data.timestamp * 1000),
+            audio_base64: data.audio_base64,
+            map_data: data.map_data ? {
+              type: data.map_data.type,
+              data: data.map_data.data,
+              map_url: data.map_data.map_url,
+              static_map_url: data.map_data.static_map_url,
+              coordinates: data.map_data.coordinates
+            } : undefined,
+            media_data: data.media_data ? {
+              type: data.media_data.type,
+              url: data.media_data.url
+            } : undefined
+          };
+
+          // Add message to UI
+          setMessages(prev => {
+            const isDuplicate = prev.some(
+              msg =>
+                msg.role === newMessage.role &&
+                msg.content === newMessage.content &&
+                Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 500
+            );
+            if (isDuplicate) {
+              console.log("Duplicate WebSocket message ignored:", data);
+              return prev;
+            }
+            return [...prev, newMessage];
+          });
+          toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 });
+
+          // Play audio in voice mode if available
           if (isVoiceMode && data.audio_base64) {
             const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`);
             audio.play().catch((err) => {
               console.error("Audio playback error:", err);
               toast.error(`Audio playback failed: ${err.message}`, { duration: 10000 });
             });
-
-            // Add message to UI only if it has map_data or media_data
-            if (data.map_data || data.media_data) {
-              const newMessage: Message = {
-                id: crypto.randomUUID(),
-                role: data.role,
-                content: data.content,
-                timestamp: new Date(data.timestamp * 1000),
-                audio_base64: data.audio_base64,
-                map_data: data.map_data ? {
-                  type: data.map_data.type,
-                  data: data.map_data.data,
-                  map_url: data.map_data.map_url,
-                  static_map_url: data.map_data.static_map_url,
-                  coordinates: data.map_data.coordinates
-                } : undefined,
-                media_data: data.media_data ? {
-                  type: data.media_data.type,
-                  url: data.media_data.url
-                } : undefined
-              };
-              setMessages(prev => {
-                const isDuplicate = prev.some(
-                  msg =>
-                    msg.role === newMessage.role &&
-                    msg.content === newMessage.content &&
-                    Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 500
-                );
-                if (isDuplicate) {
-                  console.log("Duplicate WebSocket message ignored:", data);
-                  return prev;
-                }
-                return [...prev, newMessage];
-              });
-              toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 });
-            }
-          } else {
-            // For text mode, add all messages to UI
-            const newMessage: Message = {
-              id: crypto.randomUUID(),
-              role: data.role,
-              content: data.content,
-              timestamp: new Date(data.timestamp * 1000),
-              audio_base64: data.audio_base64,
-              map_data: data.map_data ? {
-                type: data.map_data.type,
-                data: data.map_data.data,
-                map_url: data.map_data.map_url,
-                static_map_url: data.map_data.static_map_url,
-                coordinates: data.map_data.coordinates
-              } : undefined,
-              media_data: data.media_data ? {
-                type: data.media_data.type,
-                url: data.media_data.url
-              } : undefined
-            };
-            setMessages(prev => {
-              const isDuplicate = prev.some(
-                msg =>
-                  msg.role === newMessage.role &&
-                  msg.content === newMessage.content &&
-                  Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 500
-              );
-              if (isDuplicate) {
-                console.log("Duplicate WebSocket message ignored:", data);
-                return prev;
-              }
-              return [...prev, newMessage];
-            });
-            toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 });
-
-            if (data.audio_base64) {
-              const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`);
-              audio.play().catch((err) => {
-                console.error("Audio playback error:", err);
-                toast.error(`Audio playback failed: ${err.message}`, { duration: 10000 });
-              });
-            }
           }
         } catch (error) {
           console.error("Error parsing WebSocket message:", error);
@@ -321,9 +279,8 @@ function CandidateChat() {
       const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setStream(mediaStream);
 
-      // Determine supported MIME type
       const supportedMimeTypes = ['audio/webm', 'audio/ogg', 'audio/wav'];
-      let selectedMimeType = 'audio/webm'; // Default to webm
+      let selectedMimeType = 'audio/webm';
       for (const mimeType of supportedMimeTypes) {
         if (MediaRecorder.isTypeSupported(mimeType)) {
           selectedMimeType = mimeType;
@@ -388,19 +345,17 @@ function CandidateChat() {
             });
           }
 
-          // Add message to UI only if it has map_data or media_data
-          if (data.map_data || data.media_data) {
-            const newMessage: Message = {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: data.response,
-              timestamp: new Date(),
-              audio_base64: data.audio_base64,
-              map_data: data.map_data,
-              media_data: data.media_data
-            };
-            setMessages((prev) => [...prev, newMessage]);
-          }
+          // Add message to UI for all responses
+          const newMessage: Message = {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: data.response,
+            timestamp: new Date(),
+            audio_base64: data.audio_base64,
+            map_data: data.map_data,
+            media_data: data.media_data
+          };
+          setMessages((prev) => [...prev, newMessage]);
         } catch (error) {
           console.error("Error processing voice:", error);
           toast.error(`Failed to process voice input: ${error instanceof Error ? error.message : String(error)}`, { duration: 10000 });
