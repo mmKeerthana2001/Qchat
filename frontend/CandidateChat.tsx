@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "@/components/ui/sonner";
-import { Mic, StopCircle, Send, Loader2, User, Bot, Sparkles, MapPin, Star } from "lucide-react";
+import { Menu, Send, Loader2, User, MapPin, Star, GripVertical, Mic } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -44,20 +44,26 @@ interface Message {
 
 function CandidateChat() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [message, setMessage] = useState("");
-  const [isVoiceMode, setIsVoiceMode] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [websocket, setWebsocket] = useState<WebSocket | null>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
   const [selectedImage, setSelectedImage] = useState<{ src: string; alt: string } | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(256);
+  const [isResizing, setIsResizing] = useState(false);
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const maxReconnectAttempts = 3;
+  const reconnectInterval = 5000; // 5 seconds
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const resizeHandleRef = useRef<HTMLDivElement>(null);
+  const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const DEBUG = true;
 
@@ -75,10 +81,44 @@ function CandidateChat() {
     "Who is the chairman?"
   ];
 
+  // Resizing functionality
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    setIsResizing(true);
+    e.preventDefault();
+  }, []);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isResizing) return;
+    const newWidth = e.clientX;
+    const minWidth = 200;
+    const maxWidth = 500;
+    if (newWidth >= minWidth && newWidth <= maxWidth) {
+      setSidebarWidth(newWidth);
+    }
+  }, [isResizing]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  useEffect(() => {
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+    }
+  }, [isResizing, handleMouseMove, handleMouseUp]);
+
   useEffect(() => {
     const loadGoogleMapsScript = () => {
       if (window.google?.maps) return;
-
       const script = document.createElement("script");
       script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyBfdwifhc_fFYHempQVUOqR7AW8C8ynsI4&libraries=places`;
       script.async = true;
@@ -107,150 +147,173 @@ function CandidateChat() {
           position: { lat: coord.lat, lng: coord.lng },
           map,
           title: coord.label,
-          icon: {
-            url: `http://maps.google.com/mapfiles/ms/icons/${coord.color || 'red'}-dot.png`
-          }
+          icon: { url: `http://maps.google.com/mapfiles/ms/icons/${coord.color || 'red'}-dot.png` }
         });
       });
     }
   }, [messages]);
 
-  useEffect(() => {
-    const token = searchParams.get("token");
-    if (token) {
-      fetch(`http://localhost:8000/validate-token/?token=${token}`)
-        .then(response => {
-          if (!response.ok) throw new Error("Invalid token");
-          return response.json();
-        })
-        .then(data => setSessionId(data.session_id))
-        .catch(error => {
-          console.error("Token validation error:", error);
-          toast.error("Invalid or expired link", { duration: 10000 });
-        });
-    }
-  }, [searchParams]);
+  const connectWebSocket = useCallback(() => {
+    if (!sessionId) return;
 
-  useEffect(() => {
-    if (sessionId) {
-      fetch(`http://localhost:8000/messages/${sessionId}`)
-        .then(res => res.json())
-        .then(data => {
-          const fetchedMessages: Message[] = data.messages.map((msg: any) => ({
-            id: crypto.randomUUID(),
-            role: msg.role,
-            content: msg.query || msg.response,
-            timestamp: new Date(msg.timestamp * 1000),
-            audio_base64: msg.audio_base64,
-            map_data: msg.map_data ? {
-              type: msg.map_data.type,
-              data: msg.map_data.data,
-              map_url: msg.map_data.map_url,
-              static_map_url: msg.map_data.static_map_url,
-              coordinates: msg.map_data.coordinates
-            } : undefined,
-            media_data: msg.media_data ? {
-              type: msg.media_data.type,
-              url: msg.media_data.url
-            } : undefined
-          }));
-          setMessages(fetchedMessages);
-        })
-        .catch(error => {
-          console.error("Error fetching messages:", error);
-          toast.error("Failed to load messages", { duration: 10000 });
-        });
+    const ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`);
+    setWebsocket(ws);
 
-      const ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`);
-      setWebsocket(ws);
-
-      ws.onopen = () => {
-        console.log("WebSocket connected for candidate session:", sessionId);
-        ws.send(JSON.stringify({ type: "ping" }));
-      };
-
-      ws.onmessage = async (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "pong") {
-            console.log("Received pong, WebSocket alive");
-            return;
-          }
-
-          // Create new message for all assistant responses
-          const newMessage: Message = {
-            id: crypto.randomUUID(),
-            role: data.role,
-            content: data.content,
-            timestamp: new Date(data.timestamp * 1000),
-            audio_base64: data.audio_base64,
-            map_data: data.map_data ? {
-              type: data.map_data.type,
-              data: data.map_data.data,
-              map_url: data.map_data.map_url,
-              static_map_url: data.map_data.static_map_url,
-              coordinates: data.map_data.coordinates
-            } : undefined,
-            media_data: data.media_data ? {
-              type: data.media_data.type,
-              url: data.media_data.url
-            } : undefined
-          };
-
-          // Add message to UI
-          setMessages(prev => {
-            const isDuplicate = prev.some(
-              msg =>
-                msg.role === newMessage.role &&
-                msg.content === newMessage.content &&
-                Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 500
-            );
-            if (isDuplicate) {
-              console.log("Duplicate WebSocket message ignored:", data);
-              return prev;
-            }
-            return [...prev, newMessage];
-          });
-          toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 });
-
-          // Play audio in voice mode if available
-          if (isVoiceMode && data.audio_base64) {
-            const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`);
-            audio.play().catch((err) => {
-              console.error("Audio playback error:", err);
-              toast.error(`Audio playback failed: ${err.message}`, { duration: 10000 });
-            });
-          }
-        } catch (error) {
-          console.error("Error parsing WebSocket message:", error);
-          toast.error("Failed to process incoming message", { duration: 5000 });
-        }
-      };
-
-      ws.onclose = () => {
-        console.log("WebSocket closed for session:", sessionId);
-        toast.warning("WebSocket connection closed", { duration: 10000 });
-      };
-
-      ws.onerror = (error) => {
-        console.error("WebSocket error:", error);
-        toast.error("WebSocket connection error", { duration: 10000 });
-      };
-
-      const pingInterval = setInterval(() => {
+    ws.onopen = () => {
+      console.log("WebSocket connected for candidate session:", sessionId);
+      setReconnectAttempts(0);
+      ws.send(JSON.stringify({ type: "ping" }));
+      pingIntervalRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "ping" }));
           console.log("Sent ping to keep WebSocket alive");
         }
       }, 30000);
+    };
 
-      return () => {
-        ws.close();
-        clearInterval(pingInterval);
-        setWebsocket(null);
-      };
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "pong") {
+          console.log("Received pong, WebSocket alive");
+          return;
+        }
+        if (data.error) {
+          console.error("WebSocket error message:", data.error);
+          toast.error(`Server error: ${data.error}`, { duration: 10000 });
+          return;
+        }
+
+        const newMessage: Message = {
+          id: crypto.randomUUID(),
+          role: data.role,
+          content: data.content,
+          timestamp: new Date(data.timestamp * 1000),
+          audio_base64: data.audio_base64,
+          map_data: data.map_data ? {
+            type: data.map_data.type,
+            data: data.map_data.data,
+            map_url: data.map_data.map_url,
+            static_map_url: data.map_data.static_map_url,
+            coordinates: data.map_data.coordinates,
+            llm_response: data.map_data.llm_response
+          } : undefined,
+          media_data: data.media_data ? {
+            type: data.media_data.type,
+            url: data.media_data.url
+          } : undefined
+        };
+
+        setMessages(prev => {
+          // Enhanced deduplication to avoid missing messages
+          const isDuplicate = prev.some(
+            msg =>
+              msg.role === newMessage.role &&
+              msg.content === newMessage.content &&
+              Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 500
+          );
+          if (isDuplicate) {
+            console.log("Duplicate WebSocket message ignored:", data);
+            return prev;
+          }
+          return [...prev, newMessage];
+        });
+        toast.info(`${data.role.toUpperCase()} sent a new message`, { duration: 5000 });
+      } catch (error) {
+        console.error("Error parsing WebSocket message:", error);
+        toast.error("Failed to process incoming message", { duration: 5000 });
+      }
+    };
+
+    ws.onclose = (event) => {
+      console.log(`WebSocket closed for session ${sessionId}: code=${event.code}, reason=${event.reason}`);
+      clearInterval(pingIntervalRef.current!);
+      if (event.code === 1008) {
+        toast.error(`Session invalid or expired: ${event.reason}`, { duration: 10000 });
+      } else if (reconnectAttempts < maxReconnectAttempts) {
+        setTimeout(() => {
+          setReconnectAttempts(prev => prev + 1);
+          console.log(`Attempting WebSocket reconnect ${reconnectAttempts + 1}/${maxReconnectAttempts}`);
+          connectWebSocket();
+        }, reconnectInterval);
+      } else {
+        toast.error("Failed to reconnect WebSocket after multiple attempts", { duration: 10000 });
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+      toast.error("WebSocket connection error", { duration: 10000 });
+    };
+  }, [sessionId, reconnectAttempts]);
+
+  useEffect(() => {
+    const token = searchParams.get("token");
+    if (!token) {
+      toast.error("Missing token. Please access via a valid link", { duration: 10000 });
+      return;
     }
-  }, [sessionId, isVoiceMode]);
+
+    const validateToken = async () => {
+      try {
+        const response = await fetch(`http://localhost:8000/validate-token/?token=${token}`);
+        if (!response.ok) throw new Error("Invalid token");
+        const data = await response.json();
+        setSessionId(data.session_id);
+      } catch (error) {
+        console.error("Token validation error:", error);
+        toast.error("Invalid or expired link", { duration: 10000 });
+      }
+    };
+    validateToken();
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (sessionId) {
+      const fetchMessages = async () => {
+        try {
+          const res = await fetch(`http://localhost:8000/messages/${sessionId}`);
+          if (!res.ok) throw new Error("Failed to fetch messages");
+          const data = await res.json();
+          const fetchedMessages: Message[] = data.messages
+            .map((msg: any) => ({
+              id: crypto.randomUUID(),
+              role: msg.role,
+              content: msg.query || msg.response,
+              timestamp: new Date(msg.timestamp * 1000),
+              audio_base64: msg.audio_base64,
+              map_data: msg.map_data ? {
+                type: msg.map_data.type,
+                data: msg.map_data.data,
+                map_url: msg.map_data.map_url,
+                static_map_url: msg.map_data.static_map_url,
+                coordinates: msg.map_data.coordinates,
+                llm_response: msg.map_data.llm_response
+              } : undefined,
+              media_data: msg.media_data ? {
+                type: msg.media_data.type,
+                url: msg.media_data.url
+              } : undefined
+            }))
+            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+          setMessages(fetchedMessages);
+        } catch (error) {
+          console.error("Error fetching messages:", error);
+          toast.error("Failed to load messages", { duration: 10000 });
+        }
+      };
+      fetchMessages();
+      connectWebSocket();
+    }
+
+    return () => {
+      if (websocket) {
+        websocket.close();
+        clearInterval(pingIntervalRef.current!);
+        setWebsocket(null);
+      }
+    };
+  }, [sessionId, connectWebSocket]);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -259,144 +322,65 @@ function CandidateChat() {
         scrollElement.scrollTop = scrollElement.scrollHeight;
       }
     }
-  }, [messages, isRecording]);
-
-  useEffect(() => {
-    return () => {
-      if (websocket) websocket.close();
-      if (stream) stream.getTracks().forEach(track => track.stop());
-      if (recorder) recorder.stop();
-    };
-  }, [websocket, stream, recorder]);
-
-  const startRecording = async () => {
-    if (!isVoiceMode || !sessionId) {
-      toast.error("Voice mode is disabled or no session selected", { duration: 10000 });
-      return;
-    }
-    setIsRecording(true);
-    try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      setStream(mediaStream);
-
-      const supportedMimeTypes = ['audio/webm', 'audio/ogg', 'audio/wav'];
-      let selectedMimeType = 'audio/webm';
-      for (const mimeType of supportedMimeTypes) {
-        if (MediaRecorder.isTypeSupported(mimeType)) {
-          selectedMimeType = mimeType;
-          break;
-        }
-      }
-
-      if (!MediaRecorder.isTypeSupported(selectedMimeType)) {
-        throw new Error("No supported audio MIME types available for recording");
-      }
-
-      const rec = new MediaRecorder(mediaStream, { mimeType: selectedMimeType });
-      setRecorder(rec);
-      rec.start();
-      toast.info("Recording started...", { duration: 5000 });
-      if (DEBUG) console.log(`Recording started with MIME type: ${selectedMimeType}`);
-    } catch (err) {
-      console.error("Recording setup error:", err);
-      toast.error(`Recording error: ${err instanceof Error ? err.message : String(err)}`, { duration: 10000 });
-      setIsRecording(false);
-    }
-  };
-
-  const stopRecording = () => {
-    if (recorder && isRecording) {
-      recorder.stop();
-      setIsRecording(false);
-      toast.info("Recording stopped, processing...", { duration: 5000 });
-    }
-  };
-
-  useEffect(() => {
-    if (recorder) {
-      const chunks: Blob[] = [];
-      recorder.ondataavailable = (e) => chunks.push(e.data);
-      recorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: 'audio/webm' });
-        const formData = new FormData();
-        formData.append('audio', blob, 'recording.webm');
-
-        setIsLoading(true);
-        try {
-          const response = await fetch(`http://localhost:8000/voice/${sessionId}`, {
-            method: "POST",
-            body: formData,
-          });
-          if (!response.ok) {
-            const errorData = await response.json();
-            if (response.status === 429) {
-              throw new Error("The speech-to-text service is currently busy. Please try again later.");
-            }
-            throw new Error(errorData.detail || `HTTP error ${response.status}`);
-          }
-          const data = await response.json();
-
-          // Play main response audio
-          if (data.audio_base64) {
-            const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`);
-            audio.play().catch((err) => {
-              console.error("Main audio playback error:", err);
-              toast.error(`Audio playback failed: ${err.message}`, { duration: 10000 });
-            });
-          }
-
-          // Add message to UI for all responses
-          const newMessage: Message = {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: data.response,
-            timestamp: new Date(),
-            audio_base64: data.audio_base64,
-            map_data: data.map_data,
-            media_data: data.media_data
-          };
-          setMessages((prev) => [...prev, newMessage]);
-        } catch (error) {
-          console.error("Error processing voice:", error);
-          toast.error(`Failed to process voice input: ${error instanceof Error ? error.message : String(error)}`, { duration: 10000 });
-        } finally {
-          setIsLoading(false);
-          if (stream) {
-            stream.getTracks().forEach((track) => track.stop());
-          }
-          setStream(null);
-          setRecorder(null);
-        }
-      };
-    }
-  }, [recorder, sessionId, stream]);
+  }, [messages]);
 
   const handleSubmit = async (e: React.FormEvent, overrideMessage?: string) => {
     e.preventDefault();
-    if (isLoading || !sessionId) return;
+    if (isLoading || !sessionId || !message.trim()) {
+      toast.error("Cannot send message: No session or empty message", { duration: 10000 });
+      return;
+    }
 
     setIsLoading(true);
     const finalMessage = overrideMessage || message.trim();
 
     try {
-      if (finalMessage) {
-        const response = await fetch(`http://localhost:8000/chat/${sessionId}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: finalMessage, role: "candidate" })
-        });
+      // Add candidate message to UI immediately
+      const candidateMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "candidate",
+        content: finalMessage,
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, candidateMessage]);
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || "Failed to send message");
-        }
+      // Send query via HTTP
+      const response = await fetch(`http://localhost:8000/chat/${sessionId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: finalMessage, role: "candidate" })
+      });
 
-        setMessage("");
-        if (textareaRef.current) textareaRef.current.style.height = "auto";
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Failed to send message");
       }
+
+      const data = await response.json();
+      // Add assistant response to UI immediately
+      const assistantMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: data.response,
+        timestamp: new Date(),
+        map_data: data.map_data,
+        media_data: data.media_data
+      };
+      setMessages(prev => {
+        // Remove temporary candidate message if WebSocket already added it
+        const filtered = prev.filter(
+          msg => !(msg.role === "candidate" && msg.content === finalMessage && Math.abs(msg.timestamp.getTime() - candidateMessage.timestamp.getTime()) < 500)
+        );
+        return [...filtered, assistantMessage];
+      });
+
+      setMessage("");
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
     } catch (error) {
       console.error("Error sending message:", error);
       toast.error(`Failed to process request: ${error instanceof Error ? error.message : String(error)}`, { duration: 10000 });
+      // Remove candidate message on error
+      setMessages(prev => prev.filter(msg => msg.id !== candidateMessage.id));
     } finally {
       setIsLoading(false);
     }
@@ -419,6 +403,19 @@ function CandidateChat() {
   const handleSuggestedQuestionClick = (question: string) => {
     setMessage(question);
     handleSubmit(new Event('submit') as any, question);
+  };
+
+  const handleVoiceMode = () => {
+    if (!sessionId) {
+      toast.error("No session selected", { duration: 10000 });
+      return;
+    }
+    const token = searchParams.get("token");
+    navigate(`/voice-interaction?sessionId=${sessionId}&token=${token}`);
+  };
+
+  const toggleSidebar = () => {
+    setIsSidebarOpen(!isSidebarOpen);
   };
 
   const formatTime = (date: Date) => {
@@ -668,7 +665,7 @@ function CandidateChat() {
       if (mediaData.url.includes("youtube.com") || mediaData.url.includes("youtu.be")) {
         let embedUrl = mediaData.url.replace("watch?v=", "embed/");
         if (mediaData.url.includes("youtu.be")) {
-          const videoId = mediaData.url.split("youtu.be/")[1].split("?")[0].split("?")[0];
+          const videoId = mediaData.url.split("youtu.be/")[1].split("?")[0];
           embedUrl = `https://www.youtube.com/embed/${videoId}`;
         }
         return (
@@ -720,220 +717,272 @@ function CandidateChat() {
   };
 
   return (
-    <div className="flex h-screen w-full flex-col">
-      <header className="border-b border-border bg-card/50 backdrop-blur-xl p-4">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <h1 className="text-lg font-semibold text-foreground">Candidate Chat</h1>
+    <div className="flex h-screen w-full flex-row">
+      <div
+        ref={sidebarRef}
+        className={`fixed inset-y-0 left-0 bg-card/50 backdrop-blur-xl border-r border-border flex flex-col transition-transform duration-300 ease-in-out z-10 ${
+          isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        } md:relative md:translate-x-0`}
+        style={{ width: isSidebarOpen ? `${sidebarWidth}px` : '0px' }}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <h4 className="text-sm font-medium text-foreground truncate">Suggested Questions</h4>
           <Button
-            variant={isVoiceMode ? "default" : "ghost"}
-            onClick={() => setIsVoiceMode(!isVoiceMode)}
-            className="flex items-center gap-2"
+            variant="ghost"
+            size="icon"
+            className="md:hidden flex-shrink-0"
+            onClick={toggleSidebar}
           >
-            <Mic className="h-4 w-4" />
-            <span className="hidden sm:inline">Voice</span>
+            <Menu className="h-5 w-5" />
           </Button>
         </div>
-      </header>
-
-      <ScrollArea className="flex-1 p-6" ref={scrollAreaRef}>
-        <div className="max-w-4xl mx-auto space-y-6">
-          {messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-96 text-center">
-              <div className="w-16 h-16 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mb-4 animate-pulse">
-                <Sparkles className="h-8 w-8 text-white" />
-              </div>
-              <h3 className="text-lg font-semibold mb-2 text-foreground">Welcome to QChat</h3>
-              <p className="text-sm text-muted-foreground">Ask about your application or location details</p>
-              <div className="mt-4 space-y-2 w-full max-w-md">
-                <h4 className="text-sm font-medium text-foreground">Suggested Questions:</h4>
-                {suggestedQuestions.map((q, index) => (
-                  <Button
-                    key={index}
-                    variant="outline"
-                    size="sm"
-                    className="block w-full text-left hover:bg-accent transition-colors text-sm"
-                    onClick={() => handleSuggestedQuestionClick(q)}
-                  >
-                    {q}
-                  </Button>
-                ))}
-              </div>
+        <div className="flex-1 overflow-hidden">
+          <ScrollArea className="h-full">
+            <div className="p-4 space-y-2">
+              {suggestedQuestions.map((q, index) => (
+                <Button
+                  key={index}
+                  variant="outline"
+                  size="sm"
+                  className="w-full text-left text-sm text-foreground border-border hover:bg-muted/50 justify-start h-auto py-2 px-3 whitespace-normal"
+                  onClick={() => handleSuggestedQuestionClick(q)}
+                >
+                  <span className="break-words">{q}</span>
+                </Button>
+              ))}
             </div>
-          ) : (
-            messages.map((message) => (
-              <div key={message.id} className="animate-fade-in">
-                {(message.role === "hr" || message.role === "candidate") ? (
-                  <div className={`flex ${message.role === "candidate" ? "justify-end" : "justify-start"} gap-3 mb-6`}>
-                    <div className="flex flex-col items-end max-w-[70%]">
-                      <div className={`chat-bubble-${message.role} rounded-2xl ${message.role === "candidate" ? "rounded-tr-md" : "rounded-tl-md"} px-4 py-3 mb-2 bg-gradient-to-r from-blue-500 to-purple-600 text-primary-foreground shadow-sm transition-all duration-300 hover:shadow-md`}>
-                        <span className="text-xs font-semibold text-primary-foreground/80">{message.role.toUpperCase()}</span>
-                        <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-                      </div>
-                      <span className="text-xs text-muted-foreground">
-                        {formatTime(message.timestamp)}
-                      </span>
-                    </div>
-                    <Avatar className="h-8 w-8 ring-2 ring-primary/20">
-                      <AvatarFallback className="bg-gradient-to-r from-blue-500 to-purple-600 text-primary-foreground">
-                        <User className="h-4 w-4" />
-                      </AvatarFallback>
-                    </Avatar>
-                  </div>
-                ) : message.role === "assistant" ? (
-                  <div className="flex gap-3 mb-6">
-                    <Avatar className="h-8 w-8 ring-2 ring-primary/20">
-                      <AvatarFallback className="bg-card border">
-                        <Bot className="h-4 w-4 text-primary" />
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1 space-y-2">
-                      <div className="chat-bubble-ai rounded-2xl rounded-tl-md px-4 py-3 bg-card shadow-sm border border-border transition-all duration-300 hover:shadow-md">
-                        <div className="prose prose-sm max-w-none">
-                          <div className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              rehypePlugins={[rehypeRaw]}
-                              components={{
-                                h1: ({ node, ...props }) => <h1 className="text-lg font-bold mt-4 mb-2 text-foreground" {...props} />,
-                                h2: ({ node, ...props }) => <h2 className="text-base font-semibold mt-3 mb-2 text-foreground" {...props} />,
-                                h3: ({ node, ...props }) => <h3 className="text-sm font-medium mt-2 mb-1 text-foreground" {...props} />,
-                                p: ({ node, ...props }) => <p className="text-sm mb-3 text-foreground" {...props} />,
-                                ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-3 text-sm text-foreground" {...props} />,
-                                ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-3 text-sm text-foreground" {...props} />,
-                                li: ({ node, ...props }) => <li className="mb-2 text-foreground" {...props} />,
-                                strong: ({ node, ...props }) => <strong className="font-semibold text-foreground" {...props} />,
-                                em: ({ node, ...props }) => <em className="italic text-foreground" {...props} />,
-                                a: ({ node, ...props }) => <a className="text-primary underline hover:text-primary/80 transition-colors" target="_blank" rel="noopener noreferrer" {...props} />,
-                                code: ({ node, ...props }) => <code className="bg-muted px-1 py-0.5 rounded text-sm text-foreground" {...props} />,
-                                pre: ({ node, ...props }) => <pre className="bg-muted p-3 rounded-lg overflow-x-auto text-sm text-foreground" {...props} />,
-                                img: ({ node, ...props }) => (
-                                  <Dialog open={isDialogOpen && selectedImage?.src === props.src} onOpenChange={(open) => {
-                                    if (DEBUG) console.log(`Dialog open state changed: ${open}`);
-                                    setIsDialogOpen(open);
-                                    if (!open) setSelectedImage(null);
-                                  }}>
-                                    <DialogTrigger asChild>
-                                      <img
-                                        {...props}
-                                        className="inline-block w-6 h-6 object-cover rounded-md ml-2 cursor-pointer hover:opacity-80 transition-opacity"
-                                        onClick={() => {
-                                          if (DEBUG) console.log(`Triggering dialog for image: ${props.src}`);
-                                          handleImageClick(props.src || '', props.alt || '');
-                                        }}
-                                        onError={() => {
-                                          console.error(`Failed to load inline image: ${props.src}`);
-                                          toast.error(`Failed to load image: ${props.alt || 'Dress item'}`, { duration: 5000 });
-                                        }}
-                                      />
-                                    </DialogTrigger>
-                                    <DialogContent className="sm:max-w-md bg-card border border-border rounded-lg shadow-lg transition-all duration-300">
-                                      <DialogHeader>
-                                        <DialogTitle className="text-lg font-semibold text-foreground">{selectedImage?.alt || 'Dress Item'}</DialogTitle>
-                                      </DialogHeader>
-                                      <div className="flex justify-center p-4">
-                                        {selectedImage?.src ? (
-                                          <img
-                                            src={selectedImage.src}
-                                            alt={selectedImage.alt || 'Dress Item'}
-                                            className="w-48 h-48 object-contain rounded-md"
-                                            onError={() => {
-                                              console.error(`Failed to load dialog image: ${selectedImage.src}`);
-                                              toast.error(`Failed to load image: ${selectedImage.alt || 'Dress item'}`, { duration: 5005 });
-                                            }}
-                                          />
-                                        ) : (
-                                          <p className="text-sm text-muted-foreground">No image available</p>
-                                        )}
-                                      </div>
-                                    </DialogContent>
-                                  </Dialog>
-                                ),
+          </ScrollArea>
+        </div>
+        <div
+          ref={resizeHandleRef}
+          className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors group ${
+            isResizing ? 'bg-primary/40' : ''
+          }`}
+          onMouseDown={handleMouseDown}
+        >
+          <div className="absolute top-1/2 right-0 transform -translate-y-1/2 translate-x-1/2">
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+              <GripVertical className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col flex-1" style={{ marginLeft: isSidebarOpen ? 0 : 0 }}>
+        <header className="border-b border-border bg-card/50 backdrop-blur-xl p-4">
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="md:hidden"
+                onClick={toggleSidebar}
+              >
+                <Menu className="h-5 w-5" />
+              </Button>
+              <h1 className="text-lg font-semibold text-foreground">Candidate Chat</h1>
+            </div>
+            <Button
+              variant="default"
+              onClick={handleVoiceMode}
+              className="flex items-center gap-2"
+            >
+              <Mic className="h-4 w-4" />
+              <span className="hidden sm:inline">ASK ME</span>
+            </Button>
+          </div>
+        </header>
+
+        <ScrollArea className="flex-1 p-6" ref={scrollAreaRef}>
+          <div className="max-w-4xl mx-auto space-y-6">
+            {messages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-96 text-center">
+                <div className="w-16 h-16 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mb-4 animate-pulse">
+                  <img
+                    src="/assets/favicon.ico"
+                    alt="Quadrant Technologies Logo"
+                    className="w-8 h-8 object-contain"
+                    onError={() => {
+                      console.error("Failed to load Quadrant logo in welcome section");
+                      toast.error("Failed to load logo", { duration: 5000 });
+                    }}
+                  />
+                </div>
+                <h3 className="text-lg font-semibold mb-2 text-foreground">Welcome to QChat</h3>
+                <p className="text-sm text-muted-foreground">Ask about your application or location details</p>
+              </div>
+            ) : (
+              messages.map((message) => (
+                <div key={message.id} className="animate-fade-in">
+                  {(message.role === "hr" || message.role === "candidate" || message.role === "system") ? (
+                    <div className={`flex ${message.role === "candidate" ? "justify-end" : "justify-start"} gap-3 mb-6`}>
+                      <div className="flex flex-col items-end max-w-[70%]">
+                        <div className={`chat-bubble-${message.role} rounded-2xl ${message.role === "candidate" ? "rounded-tr-md" : "rounded-tl-md"} px-4 py-3 mb-2 ${message.role === "system" ? "bg-gray-100 text-foreground font-semibold text-sm" : "bg-gradient-to-r from-blue-500 to-purple-600 text-primary-foreground"} shadow-sm transition-all duration-300 hover:shadow-md`}>
+                          {message.role === "system" ? (
+                            <img
+                              src="/assets/favicon.ico"
+                              alt="Quadrant Technologies Logo"
+                              className="inline-block w-6 h-6 mr-2"
+                              onError={() => {
+                                console.error("Failed to load Quadrant logo for system message");
+                                toast.error("Failed to load logo", { duration: 5000 });
                               }}
-                            >
-                              {DOMPurify.sanitize(preprocessJobDescription(message.content))}
-                            </ReactMarkdown>
-                          </div>
-                          {message.audio_base64 && (
-                            <audio controls src={`data:audio/mp3;base64,${message.audio_base64}`} className="mt-3 w-full rounded-md" />
+                            />
+                          ) : (
+                            <span className="text-xs font-semibold text-primary-foreground/80">{message.role.toUpperCase()}</span>
                           )}
-                          {message.map_data && renderMapData(message.map_data)}
-                          {message.media_data && renderMediaData(message.media_data)}
+                          <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
                         </div>
-                      </div>
-                      <div className="flex items-center justify-between">
                         <span className="text-xs text-muted-foreground">
                           {formatTime(message.timestamp)}
                         </span>
                       </div>
+                      {message.role !== "system" && (
+                        <Avatar className="h-8 w-8 ring-2 ring-primary/20">
+                          <AvatarFallback className={`bg-gradient-to-r ${message.role === "hr" ? "from-blue-500 to-purple-600" : "from-blue-500 to-purple-600"} text-primary-foreground`}>
+                            <User className="h-4 w-4" />
+                          </AvatarFallback>
+                        </Avatar>
+                      )}
                     </div>
-                  </div>
-                ) : null}
-              </div>
-            ))
-          )}
-          {isRecording && (
-            <div className="flex justify-end gap-3 mb-6">
-              <div className="flex flex-col items-end max-w-[70%]">
-                <div className="chat-bubble-candidate rounded-2xl rounded-tr-md px-4 py-3 mb-2 bg-muted/50 animate-pulse">
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                    Listening...
-                  </p>
+                  ) : message.role === "assistant" ? (
+                    <div className="flex gap-3 mb-6">
+                      <Avatar className="h-8 w-8 ring-2 ring-primary/20">
+                        <AvatarFallback className="bg-card border">
+                          <img
+                            src="/assets/favicon.ico"
+                            alt="Quadrant Technologies Logo"
+                            className="w-6 h-6 object-contain"
+                            onError={() => {
+                              console.error("Failed to load Quadrant logo for assistant avatar");
+                              toast.error("Failed to load logo", { duration: 5000 });
+                            }}
+                          />
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 space-y-2">
+                        <div className="chat-bubble-ai rounded-2xl rounded-tl-md px-4 py-3 bg-card shadow-sm border border-border transition-all duration-300 hover:shadow-md">
+                          <div className="prose prose-sm max-w-none">
+                            <div className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                rehypePlugins={[rehypeRaw]}
+                                components={{
+                                  h1: ({ node, ...props }) => <h1 className="text-lg font-bold mt-4 mb-2 text-foreground" {...props} />,
+                                  h2: ({ node, ...props }) => <h2 className="text-base font-semibold mt-3 mb-2 text-foreground" {...props} />,
+                                  h3: ({ node, ...props }) => <h3 className="text-sm font-medium mt-2 mb-1 text-foreground" {...props} />,
+                                  p: ({ node, ...props }) => <p className="text-sm mb-3 text-foreground" {...props} />,
+                                  ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-3 text-sm text-foreground" {...props} />,
+                                  ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-3 text-sm text-foreground" {...props} />,
+                                  li: ({ node, ...props }) => {
+                                    const content = props.children?.toString() || '';
+                                    const className = content.includes('✅')
+                                      ? 'mb-2 text-foreground flex items-start gap-2 text-green-600'
+                                      : content.includes('❌')
+                                      ? 'mb-2 text-foreground flex items-start gap-2 text-red-600'
+                                      : 'mb-2 text-foreground flex items-start gap-2';
+                                    return <li className={className} {...props} />;
+                                  },
+                                  strong: ({ node, ...props }) => <strong className="font-semibold text-foreground" {...props} />,
+                                  em: ({ node, ...props }) => <em className="italic text-foreground" {...props} />,
+                                  a: ({ node, ...props }) => <a className="text-primary underline hover:text-primary/80 transition-colors" target="_blank" rel="noopener noreferrer" {...props} />,
+                                  code: ({ node, ...props }) => <code className="bg-muted px-1 py-0.5 rounded text-sm text-foreground" {...props} />,
+                                  pre: ({ node, ...props }) => <pre className="bg-muted p-3 rounded-lg overflow-x-auto text-sm text-foreground" {...props} />,
+                                  img: ({ node, ...props }) => (
+                                    <Dialog open={isDialogOpen && selectedImage?.src === props.src} onOpenChange={(open) => {
+                                      if (DEBUG) console.log(`Dialog open state changed: ${open}`);
+                                      setIsDialogOpen(open);
+                                      if (!open) setSelectedImage(null);
+                                    }}>
+                                      <DialogTrigger asChild>
+                                        <img
+                                          {...props}
+                                          className="inline-block w-6 h-6 object-cover rounded-md ml-2 cursor-pointer hover:opacity-80 transition-opacity"
+                                          onClick={() => {
+                                            if (DEBUG) console.log(`Triggering dialog for image: ${props.src}`);
+                                            handleImageClick(props.src || '', props.alt || '');
+                                          }}
+                                          onError={() => {
+                                            console.error(`Failed to load inline image: ${props.src}`);
+                                            toast.error(`Failed to load image: ${props.alt || 'Dress item'}`, { duration: 5005 });
+                                          }}
+                                        />
+                                      </DialogTrigger>
+                                      <DialogContent className="sm:max-w-md bg-card border border-border rounded-lg shadow-lg transition-all duration-300">
+                                        <DialogHeader>
+                                          <DialogTitle className="text-lg font-semibold text-foreground">{selectedImage?.alt || 'Dress Item'}</DialogTitle>
+                                        </DialogHeader>
+                                        <div className="flex justify-center p-4">
+                                          {selectedImage?.src ? (
+                                            <img
+                                              src={selectedImage.src}
+                                              alt={selectedImage.alt || 'Dress Item'}
+                                              className="w-48 h-48 object-contain rounded-md"
+                                              onError={() => {
+                                                console.error(`Failed to load dialog image: ${selectedImage.src}`);
+                                                toast.error(`Failed to load image: ${selectedImage.alt || 'Dress item'}`, { duration: 5005 });
+                                              }}
+                                            />
+                                          ) : (
+                                            <p className="text-sm text-muted-foreground">No image available</p>
+                                          )}
+                                        </div>
+                                      </DialogContent>
+                                    </Dialog>
+                                  ),
+                                }}
+                              >
+                                {DOMPurify.sanitize(preprocessJobDescription(message.content))}
+                              </ReactMarkdown>
+                            </div>
+                            {message.audio_base64 && (
+                              <audio controls src={`data:audio/mp3;base64,${message.audio_base64}`} className="mt-3 w-full rounded-md" />
+                            )}
+                            {message.map_data && renderMapData(message.map_data)}
+                            {message.media_data && renderMediaData(message.media_data)}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">
+                            {formatTime(message.timestamp)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Mic className="h-3 w-3 animate-pulse" /> Recording...
-                </span>
-              </div>
-              <Avatar className="h-8 w-8 ring-2 ring-primary/20">
-                <AvatarFallback className="bg-gradient-to-r from-blue-500 to-purple-600 text-primary-foreground">
-                  <User className="h-4 w-4" />
-                </AvatarFallback>
-              </Avatar>
-            </div>
-          )}
-        </div>
-      </ScrollArea>
+              ))
+            )}
+          </div>
+        </ScrollArea>
 
-      <div className="border-t border-border bg-card/50 backdrop-blur-xl p-4">
-        <div className="max-w-4xl mx-auto">
-          <form onSubmit={handleSubmit} className="flex items-end gap-2">
-            <div className="flex-1">
-              <Textarea
-                ref={textareaRef}
-                value={message}
-                onChange={handleTextareaChange}
-                onKeyDown={handleKeyDown}
-                placeholder={isVoiceMode ? "Voice mode active - use mic button" : "Type your message..."}
-                className="min-h-[40px] max-h-[200px] resize-none"
-                disabled={isVoiceMode || isRecording || isLoading}
-              />
-            </div>
-            {isVoiceMode && (
+        <div className="border-t border-border bg-card/50 backdrop-blur-xl p-4">
+          <div className="max-w-4xl mx-auto">
+            <form onSubmit={handleSubmit} className="flex items-end gap-2">
+              <div className="flex-1">
+                <Textarea
+                  ref={textareaRef}
+                  value={message}
+                  onChange={handleTextareaChange}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Type your message..."
+                  className="min-h-[40px] max-h-[200px] resize-none"
+                  disabled={isLoading}
+                />
+              </div>
               <Button
-                type="button"
-                variant={isRecording ? "destructive" : "default"}
+                type="submit"
                 size="icon"
-                onClick={isRecording ? stopRecording : startRecording}
-                disabled={isLoading}
+                disabled={isLoading || !message.trim()}
               >
-                {isRecording ? (
-                  <StopCircle className="h-4 w-4" />
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <Mic className="h-4 w-4" />
+                  <Send className="h-4 w-4" />
                 )}
               </Button>
-            )}
-            <Button
-              type="submit"
-              size="icon"
-              disabled={isLoading || isRecording || !message.trim()}
-            >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-            </Button>
-          </form>
+            </form>
+          </div>
         </div>
       </div>
     </div>

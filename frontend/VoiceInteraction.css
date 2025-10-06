@@ -1,0 +1,5 @@
+
+/* Ensure the chat bubbles and layout are consistent with CandidateChat */
+.max-w-md {
+  max-width: 75%;
+}
