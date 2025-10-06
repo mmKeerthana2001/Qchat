@@ -32,7 +32,21 @@ class Agent:
             "Where are all the Quadrant Technologies offices located?",
             "Show me the company video",
             "What is the dress code?",
-            "Who is the chairman?"
+            "Who is the chairman?",
+            "can u list all quadrant locations",
+            "hey",
+            "hi",
+            "hey",
+            "hi",
+            "Can you tell me more about the team I'll be working with?",
+            "What benefits does the company offer?",
+            "What is the expected start date?",
+            "What is the address of Quadrant Technologies?",
+            "Are there any PGs or restaurants near Quadrant Technologies?",
+            "Where are all the Quadrant Technologies offices located?",
+            "Show me the company video",
+            "What is the dress code?"
+            
         ]
         self.quadrant_cities = [
             "Redmond, WA", "Iselin, NJ", "Dallas, TX", "Hyderabad, Telangana",
@@ -141,9 +155,54 @@ class Agent:
                 new_line = line
             new_lines.append(new_line)
         return '\n'.join(new_lines)
+    
 
-    async def process_query(self, documents: str, history: list, query: str, role: str, intent_data: dict) -> Tuple[str, dict | None]:
+    def format_dos_donts(self, response: str) -> str:
+        """Format do's and don'ts in LLM response with markdown, emojis, and aligned bullets."""
+        lines = response.split("\n")
+        formatted = []
+        in_dos, in_donts = False, False
+        seen_items = set()  # Track unique items to avoid duplicates
+        current_section = None  # Track current section (e.g., Business Formals, Smart Casuals)
+        
+        for line in lines:
+            stripped = line.strip().lower()
+            # Detect main headers
+            if stripped.startswith("for male employees:") or stripped.startswith("for female employees:"):
+                formatted.append(f"## {line.strip()}")
+                current_section = None
+                in_dos, in_donts = False, False
+            # Detect sub-sections
+            elif stripped.startswith("business formals") or stripped.startswith("smart casuals") or stripped.startswith("footwear:") or stripped.startswith("hair") or stripped.startswith("jewelry:"):
+                current_section = line.strip()
+                formatted.append(f"### {current_section}")
+                in_dos, in_donts = False, False
+            # Detect Do's and Don'ts
+            elif stripped.startswith("do's:") or stripped.startswith("dos:"):
+                in_dos, in_donts = True, False
+                formatted.append("#### Do's")
+            elif stripped.startswith("don'ts:") or stripped.startswith("donts:"):
+                in_dos, in_donts = False, True
+                formatted.append("#### Don'ts")
+            # Process list items
+            elif (stripped.startswith("-") or stripped.startswith("*")) and (in_dos or in_donts):
+                item = line[1:].strip()
+                if item and item.lower() not in seen_items:  # Avoid duplicates
+                    formatted.append(f"  - {'✅' if in_dos else '❌'} {item}")
+                    seen_items.add(item.lower())
+            # Preserve other lines (e.g., empty lines or non-list content)
+            else:
+                formatted.append(line.rstrip())
+                in_dos, in_donts = False, False
+                current_section = None
+        
+        return "\n".join(formatted)
+
+    async def process_query(self, documents: str, history: list, query: str, role: str, intent_data: dict = None) -> Tuple[str, dict | None]:
         try:
+            # Null-safety for intent_data: Default to empty dict if None
+            intent_data = intent_data or {}
+
             prompt = (
                 "You are an expert assistant analyzing job descriptions and resumes, designed to maintain conversation context like a chat application. "
                 f"You are interacting with a {'HR representative' if role == 'hr' else 'job candidate'}. "
@@ -152,7 +211,9 @@ class Agent:
                 "Provide a concise and accurate response. If the query cannot be answered based on the provided text or history, say so clearly. "
                 "Support follow-up questions and topic switches while maintaining context. "
                 "For queries about the president, do not mention any photo or link in the response text."
+                "For queries asking for do's and don'ts (e.g., interview tips, dress code, workplace etiquette), structure the response with '#### Do's' and '#### Don'ts' sections containing bullet points starting with a dash (-). Ensure items are unique, concise, properly indented, and avoid duplicates. If applicable, include headers like '## For Male Employees:' or '## For Female Employees:' for dress code, or other relevant headers for the context (e.g., '## Interview Tips'). End with 'If you have any further questions, feel free to ask!'"
             )
+            
             if role == "candidate":
                 prompt += f"\n\nSuggested Questions for Candidate:\n" + "\n".join(f"- {q}" for q in self.suggested_questions)
             prompt += f"\n\nDocuments:\n{documents}\n\nConversation History:\n"
@@ -161,20 +222,22 @@ class Agent:
             prompt += f"\n{role.capitalize()} Query: {query}"
 
             media_data = None
+            intent = intent_data.get("intent")  # Safe now due to null-safety above
             gender = intent_data.get("gender")
-            if intent_data.get("intent") == "video":
+
+            if intent == "video":
                 prompt += "\nIf the query is about videos or company overview, provide a brief introduction to the video and reference that the company video is available for viewing. Structure the response professionally: Start with a short description (e.g., 'This video showcases the AI-empowered solutions of Quadrant Technologies.'), then mention 'You can watch the company video below for more details.' End with 'If you have any further questions, feel free to ask!'"
                 media_data = {"type": "video", "url": self.video_url} if self.video_url else None
                 if not self.video_url:
                     prompt += "\nNote: If no video URL is available, mention that the video will be provided soon."
-            elif intent_data.get("intent") == "dress":
+            elif intent == "dress":
                 if gender:
                     gender_cap = gender.capitalize()
-                    prompt += f"\nIf the query is about dress code for {gender}, structure the response starting with 'For {gender_cap} Employees:' followed by bullet points for categories like Business Formals (Monday – Thursday), Smart Casuals (Friday), Footwear, Hair & Beard/Jewelry, Not Allowed. End with 'For more details, you can view the dress code image here. If you have any further questions, feel free to ask!'"
+                    prompt += f"\nIf the query is about dress code for {gender}, structure the response starting with '## For {gender_cap} Employees:' followed by '### Business Formals (Monday–Thursday):', '### Smart Casuals (Friday):', '### Footwear:', '### Hair & Beard:' or '### Hair:', '### Jewelry:' (as applicable) with '#### Do's' and '#### Don'ts' with bullet points for allowed and prohibited categories. Each item must start with a dash (-), be unique, and avoid duplicates. End with 'For more details, you can view the dress code image here. If you have any further questions, feel free to ask!'"
                 else:
-                    prompt += "\nIf the query is about dress code, structure the response with two main sections: 'For Male Employees:' and 'For Female Employees:', each followed by bullet points for categories like Business Formals (Monday – Thursday), Smart Casuals (Friday), Footwear, Hair & Beard/Jewelry, Not Allowed. End with 'For more details, you can view the dress code image here. If you have any further questions, feel free to ask!'"
+                    prompt += "\nIf the query is about dress code, structure the response with two main sections: '## For Male Employees:' and '## For Female Employees:', each followed by '### Business Formals (Monday–Thursday):', '### Smart Casuals (Friday):', '### Footwear:', '### Hair & Beard:' or '### Hair:', '### Jewelry:' (as applicable) with '#### Do's' and '#### Don'ts' with bullet points for allowed and prohibited categories. Each item must start with a dash (-), be unique, and avoid duplicates. End with 'For more details, you can view the dress code image here. If you have any further questions, feel free to ask!'"
                 media_data = {"type": "image", "url": self.dress_code_image_url} if self.dress_code_image_url else None
-            elif intent_data.get("intent") == "president":
+            elif intent == "president":
                 media_data = {"type": "image", "url": self.president_image_url} if self.president_image_url else None
                 logger.debug(f"President intent detected, media_data set to: {media_data}")
 
@@ -189,12 +252,15 @@ class Agent:
             )
             answer = response.choices[0].message.content.strip()
 
+            # Format do's and don'ts
+            answer = self.format_dos_donts(answer)
+
             # Post-process for dress: insert inline images for all matching items
-            if intent_data.get("intent") == "dress":
+            if intent == "dress":
                 answer = self._insert_dress_images(answer)
 
             # Post-process for president: remove photo/link references
-            if intent_data.get("intent") == "president":
+            if intent == "president":
                 if "photo" in answer.lower() or "link" in answer.lower():
                     answer = answer.split("You can view")[0].strip()
                     if not answer.endswith("."):

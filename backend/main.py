@@ -1,9 +1,9 @@
 import os
 import asyncio
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Request, Depends, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import List
+from typing import Dict, List
 from read_files import ReadFiles
 from context_manager import ContextManager
 from login import LoginHandler
@@ -31,10 +31,9 @@ import requests
 from pydub import AudioSegment
 from openai import AsyncOpenAI
 from pymongo.errors import CollectionInvalid
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type  # Add tenacity imports
-
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import math
- 
+
 load_dotenv()
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
@@ -45,17 +44,18 @@ ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
 ELEVENLABS_MODEL_ID_STT = os.getenv("ELEVENLABS_MODEL_ID_STT", "scribe_v1")
 ELEVENLABS_MODEL_ID_TTS = os.getenv("ELEVENLABS_MODEL_ID_TTS", "eleven_multilingual_v2")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
- 
+
 session_storage = {}
- 
+websocket_connections: Dict[str, List[WebSocket]] = {}
+
 gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY) if GOOGLE_MAPS_API_KEY else None
- 
 agent = Agent()
- 
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
 class DebugMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp):
         super().__init__(app)
- 
+
     async def dispatch(self, request: Request, call_next):
         logger.debug(f"Request path: {request.url.path}")
         logger.debug(f"Request headers: {dict(request.headers)}")
@@ -63,35 +63,33 @@ class DebugMiddleware(BaseHTTPMiddleware):
             logger.debug("Multipart form data request detected")
         response = await call_next(request)
         return response
- 
+
 app = FastAPI()
+router = APIRouter()
+
 app.add_middleware(DebugMiddleware)
-openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
- 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:8080"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*", "upgrade", "websocket"],
 )
- 
+
 file_reader = ReadFiles()
 context_manager = ContextManager()
 login_handler = LoginHandler()
- 
-websocket_connections = {}
- 
+
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("python_multipart").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
- 
+
 mongo_client = MongoClient("mongodb://localhost:27017")
 db = mongo_client["document_analysis"]
 sessions_collection = db["sessions"]
- 
+
 security = HTTPBearer(auto_error=False)
- 
+
 async def verify_session(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if not credentials or credentials.scheme != "Bearer" or not credentials.credentials:
         logger.error("Invalid or missing Authorization header. Expected: 'Bearer <session_id>'")
@@ -110,25 +108,43 @@ async def verify_session(credentials: HTTPAuthorizationCredentials = Depends(sec
     except Exception as e:
         logger.error(f"Error verifying session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error verifying session: {str(e)}")
- 
+
+async def verify_websocket_session(session_id: str):
+    try:
+        if not is_valid_uuid(session_id):
+            logger.error(f"Invalid session_id format for WebSocket: {session_id}")
+            raise HTTPException(status_code=400, detail="Invalid session_id format. Must be a valid UUID.")
+        session = await context_manager.get_session(session_id)
+        if not session:
+            logger.error(f"Session not found for WebSocket: {session_id}")
+            raise HTTPException(status_code=404, detail="Session not found")
+        logger.info(f"Validated WebSocket session: {session_id}")
+        return session
+    except HTTPException as e:
+        logger.error(f"WebSocket session validation failed: {e.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error validating WebSocket session {session_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error validating WebSocket session: {str(e)}")
+
 class QueryRequest(BaseModel):
     query: str
     role: str
- 
+
 class SessionRequest(BaseModel):
     candidate_name: str
     candidate_email: str
- 
+
 class InitialMessageRequest(BaseModel):
     message: str
- 
+
 def is_valid_uuid(value: str) -> bool:
     uuid_pattern = re.compile(
         r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
         re.IGNORECASE
     )
     return bool(uuid_pattern.match(value))
- 
+
 @app.get("/login")
 async def initiate_login():
     try:
@@ -136,7 +152,7 @@ async def initiate_login():
     except Exception as e:
         logger.error(f"Error initiating login: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error initiating login: {str(e)}")
- 
+
 @app.get("/callback")
 async def handle_callback(request: Request):
     try:
@@ -147,7 +163,7 @@ async def handle_callback(request: Request):
     except Exception as e:
         logger.error(f"Error handling callback: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error handling callback: {str(e)}")
- 
+
 @app.get("/logout")
 async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -159,15 +175,15 @@ async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
     except Exception as e:
         logger.error(f"Error during logout: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error during logout: {str(e)}")
- 
+
 @app.get("/user-info", dependencies=[Depends(verify_session)])
 async def get_user_info(user: dict = Depends(verify_session)):
     return {"email": user["email"]}
- 
+
 @app.get("/favicon.ico")
 async def favicon():
     return Response(status_code=204)
- 
+
 @app.get("/sessions/", dependencies=[Depends(verify_session)])
 async def get_sessions():
     try:
@@ -176,7 +192,7 @@ async def get_sessions():
     except Exception as e:
         logger.error(f"Error fetching sessions: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching sessions: {str(e)}")
- 
+
 @app.post("/create-session/", dependencies=[Depends(verify_session)])
 async def create_session(request: SessionRequest):
     try:
@@ -185,12 +201,30 @@ async def create_session(request: SessionRequest):
         share_token = str(uuid.uuid4())
         await context_manager.create_session(session_id, request.candidate_name, request.candidate_email, share_token)
         logger.info(f"Created new session: {session_id} for {request.candidate_name}")
+
+        session = await context_manager.get_session(session_id)
+        initial_message = session["chat_history"][0]["query"]
+        logger.info(f"Broadcasting and saving initial message: '{initial_message}' for session {session_id}")
+        if session_id in websocket_connections:
+            for ws in websocket_connections[session_id]:
+                try:
+                    await ws.send_json({
+                        "role": "system",
+                        "content": initial_message,
+                        "timestamp": time.time(),
+                        "type": "initial"
+                    })
+                    logger.debug(f"Sent WebSocket message to client for session {session_id}")
+                except Exception as e:
+                    logger.error(f"WebSocket broadcast failed for session {session_id}: {str(e)}")
+                    websocket_connections[session_id].remove(ws)
+
         logger.info(f"Session creation time: {time.time() - start_time:.2f} seconds")
         return JSONResponse(content={"session_id": session_id, "share_token": share_token})
     except Exception as e:
         logger.error(f"Error creating session: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error creating session: {str(e)}")
- 
+
 @app.post("/extract-text/{session_id}")
 async def extract_text_from_files(session_id: str, files: List[UploadFile] = File(...)):
     start_time = time.time()
@@ -245,7 +279,7 @@ async def extract_text_from_files(session_id: str, files: List[UploadFile] = Fil
     except Exception as e:
         logger.error(f"Error processing files for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
- 
+
 @app.post("/upload-files/{session_id}")
 async def upload_files(session_id: str, files: List[UploadFile] = File(...)):
     try:
@@ -256,7 +290,7 @@ async def upload_files(session_id: str, files: List[UploadFile] = File(...)):
     except Exception as e:
         logger.error(f"Error uploading files for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error uploading files: {str(e)}")
- 
+
 @app.get("/files/{session_id}")
 async def get_files(session_id: str):
     try:
@@ -275,7 +309,7 @@ async def get_files(session_id: str):
     except Exception as e:
         logger.error(f"Error retrieving files for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving files: {str(e)}")
- 
+
 @app.get("/download-file/{session_id}")
 async def download_file(session_id: str, path: str):
     try:
@@ -291,7 +325,7 @@ async def download_file(session_id: str, path: str):
     except Exception as e:
         logger.error(f"Error downloading file for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error downloading file: {str(e)}")
- 
+
 @app.get("/messages/{session_id}")
 async def get_messages(session_id: str):
     try:
@@ -322,7 +356,7 @@ async def get_messages(session_id: str):
     except Exception as e:
         logger.error(f"Error retrieving messages for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving messages: {str(e)}")
- 
+
 @app.post("/send-initial-message/{session_id}", dependencies=[Depends(verify_session)])
 async def send_initial_message(session_id: str, req: InitialMessageRequest):
     try:
@@ -346,7 +380,7 @@ async def send_initial_message(session_id: str, req: InitialMessageRequest):
     except Exception as e:
         logger.error(f"Error sending initial message for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error sending initial message: {str(e)}")
- 
+
 @app.get("/generate-share-link/{session_id}", dependencies=[Depends(verify_session)])
 async def generate_share_link(session_id: str):
     try:
@@ -366,7 +400,7 @@ async def generate_share_link(session_id: str):
     except Exception as e:
         logger.error(f"Error generating share link for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating share link: {str(e)}")
- 
+
 @app.get("/get-session/{session_id}")
 async def get_session(session_id: str):
     try:
@@ -381,7 +415,7 @@ async def get_session(session_id: str):
     except Exception as e:
         logger.error(f"Error getting session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting session: {str(e)}")
- 
+
 @app.get("/validate-token/")
 async def validate_token(token: str):
     try:
@@ -453,12 +487,37 @@ async def process_chat_query(session_id: str, query_req: QueryRequest):
                 response, media_data, history = await context_manager.process_query(session_id, query_corrected, query_req.role, intent_data=intent_data)
                 logger.debug(f"Non-map query processed, media_data: {media_data}")
 
+        # Broadcast to all WebSocket connections
+        if session_id in websocket_connections:
+            for ws in websocket_connections[session_id]:
+                try:
+                    ws_response = {
+                        "role": query_req.role,
+                        "content": query_corrected,
+                        "timestamp": time.time(),
+                        "type": "query"
+                    }
+                    await ws.send_json(ws_response)
+                    ws_response = {
+                        "role": "assistant",
+                        "content": response,
+                        "timestamp": time.time(),
+                    }
+                    if is_map_query:
+                        ws_response["map_data"] = map_data
+                    else:
+                        ws_response["media_data"] = media_data
+                    await ws.send_json(ws_response)
+                    logger.debug(f"Broadcasted query and response to WebSocket for session {session_id}")
+                except Exception as e:
+                    logger.error(f"WebSocket broadcast failed for session {session_id}: {str(e)}")
+                    websocket_connections[session_id].remove(ws)
+
         return response, map_data, media_data, history, is_map_query
     except Exception as e:
         logger.error(f"Error in process_chat_query: {str(e)}")
         raise
 
-# Updated main.py endpoint
 @app.post("/chat/{session_id}")
 async def chat_with_documents(session_id: str, query_req: QueryRequest):
     try:
@@ -469,29 +528,6 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
         logger.info(f"Received chat query for session {session_id}: {query_req.query} by {query_req.role}")
 
         response, map_data, media_data, history, is_map_query = await process_chat_query(session_id, query_req)
-
-        if session_id in websocket_connections:
-            for ws in websocket_connections[session_id]:
-                try:
-                    await ws.send_json({
-                        "role": query_req.role,
-                        "content": query_req.query,
-                        "timestamp": time.time()
-                    })
-                    ws_response = {
-                        "role": "assistant",
-                        "content": response,
-                        "timestamp": time.time(),
-                    }
-                    if is_map_query:
-                        ws_response["map_data"] = map_data
-                    else:
-                        ws_response["media_data"] = media_data
-                    logger.debug(f"Sending WebSocket response: {ws_response}")
-                    await ws.send_json(ws_response)
-                except Exception as e:
-                    logger.error(f"WebSocket error for session {session_id}: {str(e)}")
-                    websocket_connections[session_id].remove(ws)
 
         response_data = {
             "response": response,
@@ -509,7 +545,6 @@ async def chat_with_documents(session_id: str, query_req: QueryRequest):
     except Exception as e:
         logger.error(f"Error processing chat query for session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing chat query: {str(e)}")
-
 
 country_to_city = {
     "malaysia": "Kuala Lumpur, Malaysia",
@@ -535,9 +570,6 @@ quadrant_locations = [
     {"city": "Singapore", "address": "#02-01, 68 Circular Road, Singapore, 049422", "lat": 1.2864, "lng": 103.8491},
     {"city": "Chiswick, UK", "address": "Gold Building 3 Chiswick Business Park, Chiswick, London, W4 5YA", "lat": 51.4937, "lng": -0.2786}
 ]
- 
-
-
 
 @app.post("/map-query/{session_id}")
 async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data: dict = None):
@@ -550,15 +582,12 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
         map_data = {}
         intent = intent_data.get("intent", "non_map") if intent_data else "non_map"
         
-        # Safe extraction for city_query
         city_value = intent_data.get("city") if intent_data else None
         city_query = city_value.lower() if isinstance(city_value, str) else ""
         
-        # Safe extraction for nearby_type
         nearby_value = intent_data.get("nearby_type") if intent_data else None
         nearby_type = nearby_value.lower() if isinstance(nearby_value, str) else ""
         
-        # Safe extraction for origin and destination
         origin_value = intent_data.get("origin") if intent_data else None
         origin = origin_value.strip() if isinstance(origin_value, str) else ""
         destination_value = intent_data.get("destination") if intent_data else None
@@ -566,12 +595,10 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
         
         logger.info(f"Extracted params: intent={intent}, city_query='{city_query}', nearby_type='{nearby_type}', origin='{origin}', destination='{destination}'")
 
-        # Find location based on extracted city (for single_location, nearby, or directions)
         location = None
         if city_query:
             location = next((loc for loc in quadrant_locations if loc["city"].lower() == city_query), None)
             if not location:
-                # Fallback fuzzy match if exact fails
                 for loc in quadrant_locations:
                     score = fuzz.partial_ratio(city_query, loc["city"].lower())
                     if score >= 80:
@@ -584,7 +611,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             if not location:
                 raise HTTPException(status_code=400, detail="Please specify a valid city for location query")
             
-            # Generate map URLs for the single location
             map_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(location['address'])}"
             static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?center={location['lat']},{location['lng']}&zoom=15&size=600x300&markers=color:purple|label:Q|{location['lat']},{location['lng']}&key={GOOGLE_MAPS_API_KEY}"
             
@@ -597,7 +623,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             }
 
         elif intent == "multi_location":
-            # Generate data for all Quadrant Technologies locations
             locations_data = []
             for loc in quadrant_locations:
                 map_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc['address'])}"
@@ -620,9 +645,7 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             if not location:
                 raise HTTPException(status_code=400, detail="Please specify a city for nearby search")
 
-            # Normalize nearby_type for better search
             keyword = nearby_type or "nearby amenities"
-
             logger.info(f"Using keyword for Places API: '{keyword}'")
 
             if session_id not in session_storage:
@@ -631,7 +654,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             if "more" in query_req.query.lower() if query_req and query_req.query else False:
                 session_storage[session_id]["previous_places"] = []
 
-            # Initialize coordinates list with source Quadrant location
             coordinates = [{
                 "lat": location["lat"],
                 "lng": location["lng"],
@@ -639,7 +661,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                 "color": "purple"
             }]
 
-            # Initial search with specific keyword
             places = gmaps.places_nearby(
                 location={"lat": location["lat"], "lng": location["lng"]},
                 radius=2000,
@@ -649,7 +670,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             data_list = []
             seen_place_ids = set(session_storage[session_id]["previous_places"])
 
-            # Build markers for unified map URL
             markers = [f"color:purple|label:Q|{location['lat']},{location['lng']}"]
             for place in places['results'][:10]:
                 place_id = place['place_id']
@@ -678,7 +698,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                     markers.append(f"color:red|{place_lat},{place_lng}")
                     seen_place_ids.add(place_id)
 
-            # Handle pagination for "more" queries
             next_page_token = places.get('next_page_token')
             if next_page_token and len(data_list) < 10 and "more" in query_req.query.lower() if query_req and query_req.query else False:
                 logger.info(f"Fetching more results with next_page_token: {next_page_token}")
@@ -759,16 +778,13 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             if not data_list:
                 raise HTTPException(status_code=404, detail=f"No {keyword} found near {location['city']}")
 
-            # Calculate center for unified map
             all_lats = [location["lat"]] + [place["lat"] for place in coordinates[1:]]
             all_lngs = [location["lng"]] + [place["lng"] for place in coordinates[1:]]
             center_lat = sum(all_lats) / len(all_lats)
             center_lng = sum(all_lngs) / len(all_lngs)
             
-            # Generate unified map URL
             unified_map_url = f"https://www.google.com/maps/search/?api=1&query={center_lat},{center_lng}&zoom=13"
             
-            # Generate unified static map URL for preview
             unified_static_map_url = (
                 f"https://maps.googleapis.com/maps/api/staticmap?center={center_lat},{center_lng}"
                 f"&zoom=13&size=600x300&markers={'|'.join(markers)}&key={GOOGLE_MAPS_API_KEY}"
@@ -790,7 +806,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                 raise HTTPException(status_code=404, detail="Source Quadrant location not found")
             source_addr = source["address"]
 
-            # Existing directions logic for step-by-step navigation (when origin is provided)
             if origin:
                 directions = gmaps.directions(origin, source_addr, mode="driving")
                 if directions:
@@ -823,10 +838,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             if not destination:
                 raise HTTPException(status_code=400, detail="Please specify a destination for distance query")
 
-            from agent import Agent  # Import Agent class to generate LLM response
-            agent = Agent()  # Initialize Agent (ensure proper initialization with client)
-
-            # Resolve destination address using Places API (New)
             places_url = "https://places.googleapis.com/v1/places:searchText"
             headers = {
                 "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
@@ -837,7 +848,7 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                 "locationBias": {
                     "circle": {
                         "center": {"latitude": source["lat"], "longitude": source["lng"]},
-                        "radius": 50000  # 50km radius
+                        "radius": 50000
                     }
                 }
             }
@@ -858,11 +869,10 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                 dest_lat = place.get("location", {}).get("latitude")
                 dest_lng = place.get("location", {}).get("longitude")
 
-                # Validate distance to avoid false positives (e.g., wrong state)
                 if dest_lat and dest_lng:
                     from math import radians, sin, cos, sqrt, atan2
                     def haversine_distance(lat1, lon1, lat2, lon2):
-                        R = 6371  # Earth's radius in km
+                        R = 6371
                         lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
                         dlat = lat2 - lat1
                         dlon = lon2 - lon1
@@ -870,7 +880,7 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                         c = 2 * atan2(sqrt(a), sqrt(1-a))
                         return R * c
                     approx_distance = haversine_distance(source["lat"], source["lng"], dest_lat, dest_lng)
-                    if approx_distance > 100:  # Reject if >100 km
+                    if approx_distance > 100:
                         logger.warning(f"Places API returned a location too far away: {dest_addr} ({approx_distance:.1f} km)")
                         raise HTTPException(status_code=404, detail=f"Found {dest_name} at {dest_addr}, but it's too far from {source['city']}. Please clarify the destination.")
 
@@ -878,7 +888,6 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                 logger.error(f"Places API error: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"Google Maps Places API error: {str(e)}")
 
-            # Call Google Maps Routes API with placeId or address
             routes_url = "https://routes.googleapis.com/directions/v2:computeRoutes"
             headers = {
                 "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
@@ -901,18 +910,13 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                 if route_data.get("routes"):
                     distance_meters = route_data["routes"][0]["distanceMeters"]
                     duration_seconds = route_data["routes"][0]["duration"]
-                    # Convert distance to kilometers
                     distance = f"{distance_meters / 1000:.1f} km"
-                    # Convert duration to human-readable format
-                    duration_seconds = int(duration_seconds.rstrip("s"))
                     duration = f"{duration_seconds // 60} mins" if duration_seconds < 3600 else f"{duration_seconds // 3600} hr {(duration_seconds % 3600) // 60} mins"
                     origin_addr = source_addr
                     
-                    # Generate map URLs (use resolved address for map link)
                     map_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origin_addr)}&destination={urllib.parse.quote(dest_addr)}&travelmode=driving"
                     static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?center={source['lat']},{source['lng']}&zoom=13&size=150x112&markers=label:Q|color:purple|{source['lat']},{source['lng']}&key={GOOGLE_MAPS_API_KEY}"
                     
-                    # Generate LLM response
                     map_data_temp = {
                         "type": "distance",
                         "data": {
@@ -957,45 +961,60 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
         logger.error(f"Error processing map query for session {session_id}: {str(e)}")
         logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error processing map query: {str(e)}")
-@app.websocket("/ws/{session_id}")
-async def websocket_endpoint(session_id: str, websocket: WebSocket):
-    if not is_valid_uuid(session_id):
-        await websocket.close(code=1008, reason="Invalid session_id format")
-        return
-   
-    await websocket.accept()  # Explicitly accept the WebSocket connection
-    logger.info(f"WebSocket connection accepted for session {session_id}")
- 
-    if session_id not in websocket_connections:
-        websocket_connections[session_id] = []
-    websocket_connections[session_id].append(websocket)
- 
-    try:
-        while True:
-            data = await websocket.receive_json()
-            logger.debug(f"Received WebSocket message for session {session_id}: {data}")
-            # Handle ping to keep connection alive
-            if data.get("type") == "ping":
-                await websocket.send_json({"type": "pong", "timestamp": time.time()})
-            else:
-                # Handle other message types if needed
-                pass
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for session {session_id}")
-        websocket_connections[session_id].remove(websocket)
-        if not websocket_connections[session_id]:
-            del websocket_connections[session_id]
-    except Exception as e:
-        logger.error(f"WebSocket error for session {session_id}: {str(e)}")
-        websocket_connections[session_id].remove(websocket)
-        if not websocket_connections[session_id]:
-            del websocket_connections[session_id]
-        await websocket.close(code=1011, reason=str(e))
 
-# import httpx
-# from fastapi.staticfiles import StaticFiles
-# app.mount("/static", StaticFiles(directory="static"), name="static")
-# PRELIMINARY_AUDIO_URL = "http://localhost:8000/static/preliminary_response.mp3"
+@router.websocket("/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    try:
+        await verify_websocket_session(session_id)
+        await websocket.accept()
+        if session_id not in websocket_connections:
+            websocket_connections[session_id] = []
+        websocket_connections[session_id].append(websocket)
+        logger.info(f"WebSocket connected for session {session_id}. Total connections: {len(websocket_connections[session_id])}")
+        
+        try:
+            while True:
+                data = await websocket.receive_json()
+                if data.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+                    logger.debug(f"Received ping for session {session_id}, sent pong")
+                    continue
+                
+                # Process text query
+                query = data.get("content")
+                role = data.get("role", "candidate")
+                if query:
+                    query_req = QueryRequest(query=query, role=role)
+                    response, map_data, media_data, history, is_map_query = await process_chat_query(session_id, query_req)
+                    # Persist message
+                    await persist_message(
+                        session_id=session_id,
+                        query=query,
+                        response=response,
+                        role=role,
+                        map_data=map_data,
+                        media_data=media_data
+                    )
+                
+        except WebSocketDisconnect:
+            websocket_connections[session_id].remove(websocket)
+            logger.info(f"WebSocket disconnected for session {session_id}. Remaining connections: {len(websocket_connections[session_id])}")
+            if not websocket_connections[session_id]:
+                del websocket_connections[session_id]
+        except Exception as e:
+            logger.error(f"WebSocket error for session {session_id}: {str(e)}")
+            await websocket.send_json({"error": str(e)})
+    except HTTPException as e:
+        logger.error(f"WebSocket connection rejected for session {session_id}: {e.detail}")
+        await websocket.close(code=1008, reason=e.detail)
+    except Exception as e:
+        logger.error(f"Unexpected WebSocket error for session {session_id}: {str(e)}")
+        await websocket.close(code=1011, reason="Internal server error")
+    finally:
+        if session_id in websocket_connections and websocket in websocket_connections[session_id]:
+            websocket_connections[session_id].remove(websocket)
+            if not websocket_connections[session_id]:
+                del websocket_connections[session_id]
 
 @retry(
     stop=stop_after_attempt(3),
@@ -1016,8 +1035,25 @@ def send_stt_request(audio_filename, mp3_bytes):
     response.raise_for_status()
     return response.json()
 
+async def speech_to_text(audio_bytes: bytes) -> str:
+    try:
+        audio_io = io.BytesIO(audio_bytes)
+        audio_segment = AudioSegment.from_file(audio_io)
+        mp3_io = io.BytesIO()
+        audio_segment.export(mp3_io, format="mp3")
+        mp3_io.seek(0)
+        
+        response_json = send_stt_request("recording.mp3", mp3_io.getvalue())
+        transcription = response_json.get("text", "")
+        if not transcription:
+            logger.warning("No transcription generated from audio")
+            return ""
+        return transcription
+    except Exception as e:
+        logger.error(f"Speech-to-text error: {str(e)}")
+        raise
+
 async def generate_fallback_response(query: str):
-    """Generate a fallback response using OpenAI GPT for general queries."""
     try:
         completion = await openai_client.chat.completions.create(
             model="gpt-4o-mini",
@@ -1032,148 +1068,282 @@ async def generate_fallback_response(query: str):
         logger.error(f"Fallback GPT response error: {str(e)}")
         return "I'm sorry, I couldn't process your query at the moment. Please try again."
 
-@app.post("/voice/{session_id}")
-async def voice_endpoint(session_id: str, audio: UploadFile = File(...)):
+async def process_query(context, query: str, role: str, intent_data: dict = None):
     try:
-        if not ELEVENLABS_API_KEY:
-            raise HTTPException(status_code=500, detail="ElevenLabs API key not configured")
-        if not OPENAI_API_KEY:
-            raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+        agent_instance = Agent()
+        response_data = await agent_instance.process_query(context, query, role, intent_data)
+        return response_data
+    except Exception as e:
+        logger.error(f"Error processing query: {str(e)}")
+        raise
+
+async def persist_message(session_id: str, query: str, response: str, role: str, audio_base64: str = None, map_data: dict = None, media_data: dict = None):
+    try:
+        session = await context_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        history = session.get("chat_history", [])
+        history.append({
+            "role": role,
+            "query": query,
+            "response": response,
+            "timestamp": int(datetime.now().timestamp()),
+            "audio_base64": audio_base64,
+            "map_data": map_data,
+            "media_data": media_data
+        })
+        
+        collection_name = f"sessions_{session_id}"
+        await context_manager.db[collection_name].update_one(
+            {"session_id": session_id},
+            {"$set": {"chat_history": history[-10:], "updated_at": time.time()}}
+        )
+        logger.info(f"Persisted message for session {session_id}")
+    except Exception as e:
+        logger.error(f"Error persisting message for session {session_id}: {str(e)}")
+        raise
+
+@router.websocket("/ws/voice/{session_id}")
+async def voice_websocket_endpoint(websocket: WebSocket, session_id: str):
+    try:
+        await verify_websocket_session(session_id)
+        await websocket.accept()
+        if session_id not in websocket_connections:
+            websocket_connections[session_id] = []
+        websocket_connections[session_id].append(websocket)
+        logger.info(f"Voice WebSocket connected for session {session_id}. Total connections: {len(websocket_connections[session_id])}")
+
+        try:
+            while True:
+                data = await websocket.receive_json()
+                if data.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+                    logger.debug(f"Received ping for session {session_id}, sent pong")
+                    continue
+
+                audio_data = data.get("audio_data")
+                if not audio_data:
+                    logger.error(f"No audio data provided for session {session_id}")
+                    await websocket.send_json({"error": "No audio data provided"})
+                    continue
+
+                try:
+                    audio_bytes = base64.b64decode(audio_data)
+                    logger.debug(f"Received audio data for session {session_id}: {len(audio_bytes)} bytes")
+                    transcription = await speech_to_text(audio_bytes)
+                    if not transcription:
+                        logger.warning(f"No transcription generated for session {session_id}")
+                        await websocket.send_json({"error": "No transcription generated from audio"})
+                        continue
+                    logger.debug(f"Transcribed audio for session {session_id}: {transcription}")
+
+                    # Process the transcribed query using context_manager.process_query
+                    response, media_data, history = await context_manager.process_query(
+                        session_id=session_id,
+                        query=transcription,
+                        role="candidate"
+                    )
+
+                    # Generate TTS response
+                    tts_headers = {
+                        "Accept": "audio/mpeg",
+                        "Content-Type": "application/json",
+                        "xi-api-key": ELEVENLABS_API_KEY
+                    }
+                    tts_data = {
+                        "text": response,
+                        "model_id": ELEVENLABS_MODEL_ID_TTS,
+                        "voice_settings": {
+                            "stability": 0.5,
+                            "similarity_boost": 0.5
+                        }
+                    }
+                    tts_response = requests.post(
+                        f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+                        json=tts_data,
+                        headers=tts_headers
+                    )
+                    if tts_response.status_code != 200:
+                        logger.error(f"ElevenLabs TTS API error: {tts_response.text}")
+                        await websocket.send_json({"error": f"Text-to-speech API error: {tts_response.text}"})
+                        continue
+
+                    audio_base64 = base64.b64encode(tts_response.content).decode("utf-8")
+                    
+                    response_message = {
+                        "type": "response",
+                        "role": "assistant",
+                        "content": response,
+                        "audio_base64": audio_base64,
+                        "map_data": None,
+                        "media_data": media_data,
+                        "timestamp": int(datetime.now().timestamp())
+                    }
+                    await websocket.send_json(response_message)
+                    logger.debug(f"Sent voice response for session {session_id}")
+
+                    # Persist the message
+                    await persist_message(
+                        session_id=session_id,
+                        query=transcription,
+                        response=response,
+                        role="candidate",
+                        audio_base64=audio_base64,
+                        map_data=None,
+                        media_data=media_data
+                    )
+
+                    # Broadcast to all WebSocket connections
+                    if session_id in websocket_connections:
+                        for conn in websocket_connections[session_id]:
+                            try:
+                                if conn != websocket:
+                                    await conn.send_json({
+                                        "role": "candidate",
+                                        "content": transcription,
+                                        "timestamp": int(datetime.now().timestamp()),
+                                        "type": "query"
+                                    })
+                                    await conn.send_json(response_message)
+                                    logger.debug(f"Broadcasted voice query and response to WebSocket for session {session_id}")
+                            except Exception as e:
+                                logger.error(f"WebSocket broadcast failed for session {session_id}: {str(e)}")
+                                websocket_connections[session_id].remove(conn)
+
+                except ValueError as e:
+                    logger.error(f"Invalid audio data for session {session_id}: {str(e)}")
+                    await websocket.send_json({"error": "Invalid audio data format"})
+                except Exception as e:
+                    logger.error(f"Error processing voice input for session {session_id}: {str(e)}")
+                    await websocket.send_json({"error": f"Failed to process voice input: {str(e)}"})
+            
+        except WebSocketDisconnect:
+            logger.info(f"Voice WebSocket disconnected for session {session_id}. Remaining connections: {len(websocket_connections.get(session_id, [])) - 1}")
+            websocket_connections[session_id].remove(websocket)
+            if not websocket_connections[session_id]:
+                del websocket_connections[session_id]
+        except Exception as e:
+            logger.error(f"WebSocket error for session {session_id}: {str(e)}")
+            await websocket.send_json({"error": str(e)})
+    except HTTPException as e:
+        logger.error(f"Voice WebSocket connection rejected for session {session_id}: {e.detail}")
+        await websocket.close(code=1008, reason=e.detail)
+    except Exception as e:
+        logger.error(f"Unexpected Voice WebSocket error for session {session_id}: {str(e)}")
+        await websocket.close(code=1011, reason="Internal server error")
+    finally:
+        if session_id in websocket_connections and websocket in websocket_connections[session_id]:
+            websocket_connections[session_id].remove(websocket)
+            if not websocket_connections[session_id]:
+                del websocket_connections[session_id]
+            logger.info(f"Voice WebSocket connection closed for session {session_id}. Remaining connections: {len(websocket_connections.get(session_id, []))}")
+
+@app.post("/voice/{session_id}")
+async def process_voice(session_id: str, audio: UploadFile = File(...)):
+    try:
         if not is_valid_uuid(session_id):
             raise HTTPException(status_code=400, detail="Invalid session_id format. Must be a valid UUID.")
-
-        # Read audio file
-        audio_bytes = await audio.read()
-        logger.debug(f"Received audio file: {audio.filename}, size: {len(audio_bytes)} bytes")
-
-        # Convert webm to mp3
-        audio_io = io.BytesIO(audio_bytes)
-        try:
-            audio_segment = AudioSegment.from_file(audio_io, format="webm")
-            mp3_io = io.BytesIO()
-            audio_segment.export(mp3_io, format="mp3")
-            mp3_bytes = mp3_io.getvalue()
-            logger.debug("Converted webm to mp3 successfully")
-        except Exception as e:
-            logger.error(f"Audio conversion error: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error converting audio: {str(e)}")
-
-        # Speech to Text
-        try:
-            transcript_data = send_stt_request(audio.filename, mp3_bytes)
-            transcript = transcript_data.get("text")
-            if not transcript:
-                raise HTTPException(status_code=400, detail="No transcript generated from audio")
-            logger.info(f"STT successful, transcript: {transcript}")
-        except requests.HTTPError as e:
-            if e.response.status_code == 429:
-                logger.error(f"STT API rate limit exceeded: {e.response.text}")
-                raise HTTPException(
-                    status_code=429,
-                    detail="The speech-to-text service is currently busy. Please try again later."
-                )
-            logger.error(f"STT API error: {str(e)}, Response: {e.response.text}")
-            raise HTTPException(status_code=500, detail=f"STT API error: {str(e)}")
-        except Exception as e:
-            logger.error(f"Unexpected STT error: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Unexpected STT error: {str(e)}")
-
-        # Initialize database collection if it doesn't exist
-        collection_name = f"docs_{session_id}"
-        try:
-            await context_manager.db.create_collection(collection_name)
-            logger.debug(f"Created collection {collection_name}")
-        except CollectionInvalid:
-            logger.debug(f"Collection {collection_name} already exists or creation not needed")
-
-        # Process query with fallback
-        response = None
-        map_data = None
-        media_data = None
-        is_map_query = False
-        history = []
-        try:
-            query_req = QueryRequest(query=transcript, role="candidate")
-            response, map_data, media_data, history, is_map_query = await process_chat_query(session_id, query_req)
-            logger.debug(f"Query processed, response: {response}, is_map_query: {is_map_query}")
-        except Exception as e:
-            logger.error(f"Query processing failed: {str(e)}")
-            # Fallback to GPT for general queries
-            response = await generate_fallback_response(transcript)
-            history = [{"role": "candidate", "content": transcript, "timestamp": time.time()},
-                       {"role": "assistant", "content": response, "timestamp": time.time()}]
-            logger.info(f"Fallback response generated: {response}")
-
-        # Add to history
-        history[-1]["audio_base64"] = None  # Will add TTS audio later
-
-        # Update session with new history
-        session_collection = f"sessions_{session_id}"
-        await context_manager.db[session_collection].update_one(
-            {"session_id": session_id},
-            {"$set": {"chat_history": history[-10:], "updated_at": time.time()}},
-            upsert=True
-        )
-        logger.debug(f"Session {session_id} updated with new history")
-
-        # Text to Speech for main response
-        tts_text = response
-        tts_url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
-        tts_headers = {
-            "xi-api-key": ELEVENLABS_API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "audio/mp3"
+        
+        logger.info(f"Processing voice input for session {session_id}")
+        start_time = time.time()
+        audio_content = await audio.read()
+        if not audio_content:
+            logger.error(f"No audio content received for session {session_id}")
+            raise HTTPException(status_code=400, detail="No audio content provided")
+        
+        audio_io = io.BytesIO(audio_content)
+        audio_segment = AudioSegment.from_file(audio_io)
+        wav_io = io.BytesIO()
+        audio_segment.export(wav_io, format="wav")
+        wav_io.seek(0)
+        
+        headers = {
+            "Accept": "application/json",
+            "xi-api-key": ELEVENLABS_API_KEY
         }
-        tts_payload = {
-            "text": tts_text,
+        files = {
+            "file": ("recording.wav", wav_io, "audio/wav"),
+            "model_id": (None, ELEVENLABS_MODEL_ID_STT)
+        }
+        response = requests.post(
+            "https://api.elevenlabs.io/v1/speech-to-text",
+            headers=headers,
+            files=files
+        )
+        if response.status_code != 200:
+            logger.error(f"ElevenLabs STT API error: {response.text}")
+            if response.status_code == 429:
+                raise HTTPException(status_code=429, detail="The speech-to-text service is currently busy. Please try again later.")
+            raise HTTPException(status_code=500, detail=f"Speech-to-text API error: {response.text}")
+        
+        transcription = response.json().get("text")
+        if not transcription:
+            logger.warning(f"No transcription received for session {session_id}")
+            raise HTTPException(status_code=400, detail="No transcription could be generated from the audio")
+        
+        logger.info(f"Transcribed audio for session {session_id}: {transcription}")
+        
+        response, media_data, history = await context_manager.process_query(session_id, transcription, "candidate")
+        
+        tts_headers = {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": ELEVENLABS_API_KEY
+        }
+        tts_data = {
+            "text": response,
             "model_id": ELEVENLABS_MODEL_ID_TTS,
             "voice_settings": {
                 "stability": 0.5,
                 "similarity_boost": 0.5
             }
         }
-        try:
-            tts_response = requests.post(tts_url, headers=tts_headers, json=tts_payload)
-            tts_response.raise_for_status()
-            audio_bytes = tts_response.content
-            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
-            logger.info("Main TTS successful, audio generated")
-        except requests.RequestException as e:
-            logger.error(f"TTS API error: {str(e)}, Response: {tts_response.text}")
-            raise HTTPException(status_code=500, detail=f"TTS API error: {str(e)}")
-
-        # Broadcast via WebSocket
+        tts_response = requests.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+            json=tts_data,
+            headers=tts_headers
+        )
+        if tts_response.status_code != 200:
+            logger.error(f"ElevenLabs TTS API error: {tts_response.text}")
+            raise HTTPException(status_code=500, detail=f"Text-to-speech API error: {tts_response.text}")
+        
+        audio_base64 = base64.b64encode(tts_response.content).decode("utf-8")
+        logger.info(f"Generated audio response for session {session_id}")
+        
         if session_id in websocket_connections:
             for ws in websocket_connections[session_id]:
                 try:
-                    # Send main response
-                    ws_response = {
+                    await ws.send_json({
+                        "role": "candidate",
+                        "content": transcription,
+                        "timestamp": time.time(),
+                        "type": "query"
+                    })
+                    await ws.send_json({
                         "role": "assistant",
                         "content": response,
                         "timestamp": time.time(),
                         "audio_base64": audio_base64,
-                        "is_preliminary": False
-                    }
-                    if is_map_query:
-                        ws_response["map_data"] = map_data
-                    if media_data:
-                        ws_response["media_data"] = media_data
-                    await ws.send_json(ws_response)
-                    logger.debug(f"WebSocket message sent for session {session_id}")
+                        "media_data": media_data,
+                        "type": "response"
+                    })
+                    logger.debug(f"Sent voice response via WebSocket for session {session_id}")
                 except Exception as e:
-                    logger.error(f"WebSocket broadcast error for session {session_id}: {str(e)}")
+                    logger.error(f"WebSocket send failed for session {session_id}: {str(e)}")
                     websocket_connections[session_id].remove(ws)
-
+        
+        logger.info(f"Voice processing time: {time.time() - start_time:.2f} seconds")
         return JSONResponse(content={
-            "transcript": transcript,
             "response": response,
             "audio_base64": audio_base64,
-            "map_data": map_data if is_map_query else None,
-            "media_data": media_data if not is_map_query else None
+            "media_data": media_data
         })
     except HTTPException as e:
-        logger.error(f"HTTPException in voice endpoint for session {session_id}: {e.detail}")
+        logger.error(f"HTTP error in voice processing: {e.detail}")
         raise
     except Exception as e:
-        logger.error(f"Error in voice endpoint for session {session_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing voice query: {str(e)}")
+        logger.error(f"Error processing voice for session {session_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing voice: {str(e)}")
+
+app.include_router(router)
