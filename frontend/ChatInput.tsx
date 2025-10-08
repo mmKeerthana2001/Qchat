@@ -95,7 +95,7 @@ export function ChatInput({ sessionId, addMessage, role, isInitialMessageSent, s
     }
 
     setIsLoading(true)
-    const initialMessage = message.trim() || "Welcome to QChat. Feel free to ask any Questions."
+    const initialMessage = message.trim() || "QChat is here to assist you with your queries along the way."
 
     try {
       // Send initial message if not already sent
@@ -410,16 +410,7 @@ export function ChatInput({ sessionId, addMessage, role, isInitialMessageSent, s
                   />
                 </div>
               )}
-              <Button
-                type="button"
-                variant={isRecording ? "destructive" : "ghost"}
-                size="icon"
-                className="h-9 w-9"
-                onClick={isRecording ? stopRecording : startRecording}
-                disabled={isLoading || !isVoiceMode}
-              >
-                {isRecording ? <StopCircle className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-              </Button>
+              
               <div className="flex-1">
                 <Textarea
                   ref={textareaRef}

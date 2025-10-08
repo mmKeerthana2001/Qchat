@@ -1,10 +1,11 @@
+ 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faMicrophone, faStop, faSpinner, faArrowLeft, faPause, faPlay } from '@fortawesome/free-solid-svg-icons';
 import './VoiceInteraction.css';
-
+ 
 interface Message {
   role: string;
   query: string;
@@ -14,7 +15,7 @@ interface Message {
   map_data?: any;
   media_data?: { type: string; url: string };
 }
-
+ 
 const VoiceInteraction: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -24,16 +25,18 @@ const VoiceInteraction: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentAudioType, setCurrentAudioType] = useState<'none' | 'preliminary1' | 'preliminary2' | 'response'>('none');
   const socketRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const secondaryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef<number>(0);
   const maxReconnectAttempts = 3;
-  const reconnectInterval = 5000; // 5 seconds
-
+  const reconnectInterval = 7000; // 5 seconds
+ 
   const connectWebSocket = useCallback(() => {
     if (!sessionId) return;
-
+ 
     socketRef.current = new WebSocket(`ws://localhost:8000/ws/voice/${sessionId}`);
     socketRef.current.onopen = () => {
       console.log(`Voice WebSocket connected for session: ${sessionId}`);
@@ -46,7 +49,7 @@ const VoiceInteraction: React.FC = () => {
       }, 30000);
       socketRef.current.onclose = () => clearInterval(pingInterval);
     };
-
+ 
     socketRef.current.onmessage = async (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -63,7 +66,13 @@ const VoiceInteraction: React.FC = () => {
         // Only process assistant responses with audio_base64
         if (data.audio_base64 && data.role === 'assistant') {
           if (audioRef.current) {
+            // Clear any pending secondary timeout
+            if (secondaryTimeoutRef.current) {
+              clearTimeout(secondaryTimeoutRef.current);
+              secondaryTimeoutRef.current = null;
+            }
             audioRef.current.src = `data:audio/mpeg;base64,${data.audio_base64}`;
+            setCurrentAudioType('response');
             try {
               await audioRef.current.play();
               setIsPlaying(true);
@@ -82,12 +91,12 @@ const VoiceInteraction: React.FC = () => {
         setError('Failed to process incoming voice message.');
       }
     };
-
+ 
     socketRef.current.onerror = (err) => {
       console.error('Voice WebSocket error:', err);
       setError('WebSocket connection error. Attempting to reconnect...');
     };
-
+ 
     socketRef.current.onclose = (event) => {
       console.log(`Voice WebSocket closed for session: ${sessionId}`, event);
       if (event.code === 1008) {
@@ -100,7 +109,7 @@ const VoiceInteraction: React.FC = () => {
       }
     };
   }, [sessionId]);
-
+ 
   useEffect(() => {
     const queryParams = new URLSearchParams(location.search);
     const sessionId = queryParams.get('sessionId');
@@ -110,7 +119,7 @@ const VoiceInteraction: React.FC = () => {
       return;
     }
     setSessionId(sessionId);
-
+ 
     const validateToken = async () => {
       try {
         await axios.get('http://localhost:8000/validate-token/', { params: { token } });
@@ -120,26 +129,59 @@ const VoiceInteraction: React.FC = () => {
       }
     };
     validateToken();
-
+ 
     connectWebSocket();
-
+ 
     return () => {
       socketRef.current?.close();
+      if (secondaryTimeoutRef.current) {
+        clearTimeout(secondaryTimeoutRef.current);
+      }
     };
   }, [location.search, connectWebSocket]);
-
+ 
+  const playPreliminaryResponse = () => {
+    if (audioRef.current) {
+      audioRef.current.src = '/static/preliminary_response.mp3';
+      setCurrentAudioType('preliminary1');
+      audioRef.current.play()
+        .then(() => {
+          setIsPlaying(true);
+          setIsPaused(false);
+        })
+        .catch(err => {
+          console.error('Error playing preliminary response:', err);
+        });
+    }
+  };
+ 
+  const playSecondaryResponse = () => {
+    if (audioRef.current) {
+      audioRef.current.src = '/static/preliminary_response_1.mp3';
+      setCurrentAudioType('preliminary2');
+      audioRef.current.play()
+        .then(() => {
+          setIsPlaying(true);
+          setIsPaused(false);
+        })
+        .catch(err => {
+          console.error('Error playing secondary response:', err);
+        });
+    }
+  };
+ 
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       const audioChunks: Blob[] = [];
-
+ 
       mediaRecorderRef.current.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunks.push(event.data);
         }
       };
-
+ 
       mediaRecorderRef.current.onstop = async () => {
         if (audioChunks.length === 0) {
           setError('No audio recorded. Please try again.');
@@ -163,6 +205,7 @@ const VoiceInteraction: React.FC = () => {
               timestamp: Date.now() / 1000,
             })
           );
+          playPreliminaryResponse();
           setTimeout(() => {
             if (isProcessing) {
               setError('No response from server. Please try again.');
@@ -174,7 +217,7 @@ const VoiceInteraction: React.FC = () => {
           setIsProcessing(false);
         }
       };
-
+ 
       mediaRecorderRef.current.start(1000);
       setIsRecording(true);
     } catch (err: any) {
@@ -182,7 +225,7 @@ const VoiceInteraction: React.FC = () => {
       setError('Failed to access microphone. Please check permissions.');
     }
   };
-
+ 
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
@@ -190,7 +233,7 @@ const VoiceInteraction: React.FC = () => {
       setIsRecording(false);
     }
   };
-
+ 
   const toggleRecording = () => {
     if (isRecording) {
       stopRecording();
@@ -198,16 +241,21 @@ const VoiceInteraction: React.FC = () => {
       startRecording();
     }
   };
-
+ 
   const stopResponse = () => {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
       setIsPlaying(false);
       setIsPaused(false);
+      setCurrentAudioType('none');
+      if (secondaryTimeoutRef.current) {
+        clearTimeout(secondaryTimeoutRef.current);
+        secondaryTimeoutRef.current = null;
+      }
     }
   };
-
+ 
   const togglePause = () => {
     if (audioRef.current) {
       if (isPaused) {
@@ -221,22 +269,53 @@ const VoiceInteraction: React.FC = () => {
       }
     }
   };
-
+ 
+  const handleAudioEnded = () => {
+    setIsPlaying(false);
+    setIsPaused(false);
+    if (isProcessing) {
+      if (currentAudioType === 'preliminary1') {
+        secondaryTimeoutRef.current = setTimeout(() => {
+          if (isProcessing) {
+            playSecondaryResponse();
+          }
+        }, 7000);
+      }
+      // For 'preliminary2', do nothing additional for now
+    }
+    setCurrentAudioType('none');
+  };
+ 
   const handleBack = () => {
     const token = new URLSearchParams(location.search).get('token');
     navigate(`/candidate-chat?token=${token}`);
   };
-
+ 
+  const getStatusText = () => {
+    if (isRecording) return 'Listening...';
+    if (isProcessing) return 'Thinking...';
+    if (isPlaying) return 'Speaking...';
+    if (isPaused) return 'Paused';
+    return 'Speak your question, and I\'ll respond with voice.';
+  };
+ 
+  const getBlobClass = () => {
+    if (isRecording) return 'blob listening';
+    if (isProcessing) return 'blob thinking';
+    if (isPlaying) return 'blob speaking';
+    return 'blob idle';
+  };
+ 
   if (error) {
-    return <div className="text-red-500 text-center p-4">{error}</div>;
+    return <div className="text-red-500 text-center p-4 bg-black h-screen flex items-center justify-center">{error}</div>;
   }
-
+ 
   return (
-    <div className="flex flex-col h-screen bg-gray-100">
-      <div className="bg-white shadow p-4 flex items-center">
+    <div className="flex flex-col h-screen bg-black text-white">
+      <div className="p-4 flex items-center">
         <button
           onClick={handleBack}
-          className="p-2 bg-gray-500 hover:bg-gray-600 text-white rounded-full mr-2"
+          className="p-2 bg-gray-800 hover:bg-gray-700 text-white rounded-full mr-2"
           title="Back to Chat"
         >
           <FontAwesomeIcon icon={faArrowLeft} />
@@ -244,61 +323,60 @@ const VoiceInteraction: React.FC = () => {
         <img src="/assets/favicon.ico" alt="Quadrant Logo" className="h-8 w-8 mr-2" />
         <h1 className="text-xl font-bold">Voice Interaction</h1>
       </div>
-      <div className="flex-1 flex items-center justify-center p-4">
-        <div className="text-center text-gray-500">
-          Speak your question, and I'll respond with voice.
+      <div className="flex-1 flex flex-col items-center justify-center p-4">
+        <div className={getBlobClass()}></div>
+        <div className="mt-4 text-gray-400 text-center">
+          {getStatusText()}
         </div>
       </div>
-      <div className="bg-white p-4 flex items-center space-x-2">
+      <div className="p-4 flex justify-center items-center space-x-4 bg-black">
         <button
           onClick={toggleRecording}
-          disabled={isProcessing}
-          className={`p-2 rounded-full ${
+          disabled={isProcessing || isPlaying || isPaused}
+          className={`p-4 rounded-full text-white ${
             isRecording
-              ? 'bg-red-500 hover:bg-red-600'
+              ? 'bg-red-600 hover:bg-red-700'
               : isProcessing
-              ? 'bg-gray-300 cursor-not-allowed'
-              : 'bg-green-500 hover:bg-green-600'
-          } text-white`}
+              ? 'bg-gray-600 cursor-not-allowed'
+              : 'bg-blue-600 hover:bg-blue-700'
+          }`}
           title={isRecording ? 'Stop Listening' : 'Start Listening'}
         >
           {isProcessing ? (
-            <FontAwesomeIcon icon={faSpinner} spin />
+            <FontAwesomeIcon icon={faSpinner} spin size="lg" />
           ) : (
-            <FontAwesomeIcon icon={faMicrophone} />
+            <FontAwesomeIcon icon={faMicrophone} size="lg" />
           )}
         </button>
         <button
           onClick={togglePause}
           disabled={!isPlaying && !isPaused}
-          className={`p-2 rounded-full ${
-            isPlaying || isPaused ? 'bg-blue-500 hover:bg-blue-600' : 'bg-gray-300 cursor-not-allowed'
-          } text-white`}
+          className={`p-4 rounded-full text-white ${
+            isPlaying || isPaused ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-600 cursor-not-allowed'
+          }`}
           title={isPaused ? 'Resume Response' : 'Pause Response'}
         >
-          <FontAwesomeIcon icon={isPaused ? faPlay : faPause} />
+          <FontAwesomeIcon icon={isPaused ? faPlay : faPause} size="lg" />
         </button>
         <button
           onClick={stopResponse}
           disabled={!isPlaying && !isPaused}
-          className={`p-2 rounded-full ${
-            isPlaying || isPaused ? 'bg-orange-500 hover:bg-orange-600' : 'bg-gray-300 cursor-not-allowed'
-          } text-white`}
+          className={`p-4 rounded-full text-white ${
+            isPlaying || isPaused ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-600 cursor-not-allowed'
+          }`}
           title="Stop Response"
         >
-          <FontAwesomeIcon icon={faStop} />
+          <FontAwesomeIcon icon={faStop} size="lg" />
         </button>
       </div>
       <audio
         ref={audioRef}
         onPlay={() => setIsPlaying(true)}
-        onEnded={() => {
-          setIsPlaying(false);
-          setIsPaused(false);
-        }}
+        onEnded={handleAudioEnded}
       />
     </div>
   );
 };
-
+ 
 export default VoiceInteraction;
+ 

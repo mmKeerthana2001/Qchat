@@ -1,5 +1,77 @@
-
-/* Ensure the chat bubbles and layout are consistent with CandidateChat */
-.max-w-md {
-  max-width: 75%;
+.blob {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  background: radial-gradient(circle at 50% 50%, rgba(0, 255, 255, 0.8) 0%, rgba(0, 128, 255, 0.6) 40%, rgba(0, 0, 255, 0.4) 80%, transparent 100%);
+  border-radius: 50%;
+  box-shadow: 0 0 30px rgba(0, 191, 255, 0.6), inset 0 0 20px rgba(255, 255, 255, 0.3);
+  filter: blur(4px); /* Reduced blur for sharpness */
+  opacity: 0.9;
+  transition: border-radius 0.5s ease-in-out;
 }
+ 
+.blob::before {
+  content: '';
+  position: absolute;
+  top: 20%;
+  left: 20%;
+  width: 60%;
+  height: 60%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.5), transparent 70%);
+  border-radius: 50%;
+  filter: blur(8px); /* Subtle inner glow for illusion depth */
+  animation: inner-rotate 10s infinite linear;
+}
+ 
+.blob.idle {
+  animation: gentle-pulse 2s infinite alternate ease-in-out;
+}
+ 
+.blob.listening {
+  animation: pulse 1s infinite alternate ease-in-out;
+}
+ 
+.blob.thinking,
+.blob.speaking {
+  animation: morph 5s infinite alternate ease-in-out;
+}
+ 
+@keyframes gentle-pulse {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.02);
+  }
+}
+ 
+@keyframes pulse {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.05);
+  }
+}
+ 
+@keyframes morph {
+  0% {
+    border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%;
+  }
+  50% {
+    border-radius: 30% 60% 70% 40% / 50% 60% 30% 50%;
+  }
+  100% {
+    border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%;
+  }
+}
+ 
+@keyframes inner-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+ 

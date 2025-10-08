@@ -7,7 +7,8 @@ import { UploadedFilesPanel } from "@/components/layout/UploadedFilesPanel"
 import { toast } from "@/components/ui/sonner"
 import { useNavigate, useLocation } from "react-router-dom"
 import { Button } from "@/components/ui/button"
-import { Mic } from "lucide-react" // Added import for Mic icon
+import { Sun, Moon } from "lucide-react"
+import { useTheme } from "@/components/ThemeProvider"
 
 interface Chat {
   id: string;
@@ -52,6 +53,7 @@ export function ChatLayout() {
   const [isVoiceMode, setIsVoiceMode] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
+  const { setTheme, theme } = useTheme()
 
   const getSessionHeaders = () => {
     const sessionId = localStorage.getItem("session_id")
@@ -373,20 +375,26 @@ export function ChatLayout() {
         setSelectedSession={setSelectedSession}
         initialMessageSent={initialMessageSent[selectedSession || ''] || false}
       />
-      <div className="flex flex-col flex-1">
-        <div className="flex justify-between items-center p-4 border-b">
-          <ChatHeader />
-          <div className="flex items-center gap-2">
+      <div className="flex flex-col flex-1 relative">
+        <div className="relative border-b w-full">
+          <ChatHeader
+            onToggleSidebar={() => {}} // Placeholder, as ChatSidebar is handled separately
+            sidebarOpen={true} // Placeholder
+            thinkDeepMode={false} // Placeholder
+            onToggleThinkDeep={() => {}} // Placeholder
+          />
+          <div className="absolute right-4 top-4">
             <Button
-              variant={isVoiceMode ? "default" : "ghost"}
-              onClick={() => setIsVoiceMode(!isVoiceMode)}
-              className="flex items-center gap-2"
+              variant="ghost"
+              size="icon"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="h-9 w-9"
             >
-              <Mic className="h-4 w-4" />
-              <span className="hidden sm:inline">Voice</span>
-            </Button>
-            <Button variant="outline" onClick={handleLogout}>
-              Logout
+              {theme === "dark" ? (
+                <Sun className="h-5 w-5" />
+              ) : (
+                <Moon className="h-5 w-5" />
+              )}
             </Button>
           </div>
         </div>

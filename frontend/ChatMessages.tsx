@@ -1,5 +1,3 @@
-// Updated chatmessages.tsx
-
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -9,6 +7,9 @@ import { useEffect, useRef } from "react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import rehypeRaw from 'rehype-raw';
+import DOMPurify from 'dompurify';
+
 interface MapData {
   type: "address" | "nearby" | "directions" | "multi_location" | "distance";
   data: string | { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[] | string[] | { city: string; address: string; map_url?: string; static_map_url?: string }[] | { origin: string; destination: string; distance: string; duration: string };
@@ -16,16 +17,26 @@ interface MapData {
   static_map_url?: string;
   coordinates?: { lat: number; lng: number; label: string; color?: string }[];
   llm_response?: string;
+  encoded_polyline?: string; // Added for distance route map
 }
 
 interface MediaData {
-  type: "video" | "image"
-  url: string
+  type: "video" | "image";
+  url: string;
 }
 
 interface Message {
   id: string;
   role: "user" | "assistant" | "system" | "hr" | "candidate";
+  content: string;
+  timestamp: Date;
+  audio_base64?: string;
+  map_data?: MapData;
+}
+
+interface Message {
+  id: string;
+  role: string;
   content: string;
   timestamp: Date;
   audio_base64?: string;
@@ -48,26 +59,60 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
 
   useEffect(() => {
     const lastMessage = messages[messages.length - 1];
-    if (lastMessage?.map_data?.type === "nearby" && lastMessage.map_data.coordinates && mapRef.current && window.google?.maps) {
-      const coordinates = lastMessage.map_data.coordinates;
-      const centerLat = coordinates.reduce((sum, coord) => sum + coord.lat, 0) / coordinates.length;
-      const centerLng = coordinates.reduce((sum, coord) => sum + coord.lng, 0) / coordinates.length;
+    if (lastMessage?.map_data && mapRef.current && window.google?.maps) {
+      if (lastMessage.map_data.type === "nearby" && lastMessage.map_data.coordinates) {
+        const coordinates = lastMessage.map_data.coordinates;
+        const centerLat = coordinates.reduce((sum, coord) => sum + coord.lat, 0) / coordinates.length;
+        const centerLng = coordinates.reduce((sum, coord) => sum + coord.lng, 0) / coordinates.length;
 
-      const map = new window.google.maps.Map(mapRef.current, {
-        zoom: 13,
-        center: { lat: centerLat, lng: centerLng },
-      });
-
-      coordinates.forEach((coord) => {
-        new window.google.maps.Marker({
-          position: { lat: coord.lat, lng: coord.lng },
-          map,
-          title: coord.label,
-          icon: {
-            url: `http://maps.google.com/mapfiles/ms/icons/${coord.color || 'red'}-dot.png`,
-          },
+        const map = new window.google.maps.Map(mapRef.current, {
+          zoom: 13,
+          center: { lat: centerLat, lng: centerLng },
         });
-      });
+
+        coordinates.forEach((coord) => {
+          new window.google.maps.Marker({
+            position: { lat: coord.lat, lng: coord.lng },
+            map,
+            title: coord.label,
+            icon: {
+              url: `http://maps.google.com/mapfiles/ms/icons/${coord.color || 'red'}-dot.png`,
+            },
+          });
+        });
+      } else if (lastMessage.map_data.type === "distance" && lastMessage.map_data.coordinates && lastMessage.map_data.encoded_polyline) {
+        const coordinates = lastMessage.map_data.coordinates;
+        const bounds = new window.google.maps.LatLngBounds();
+        coordinates.forEach(coord => bounds.extend({ lat: coord.lat, lng: coord.lng }));
+
+        const map = new window.google.maps.Map(mapRef.current, {
+          zoom: 13,
+          center: bounds.getCenter(),
+          mapTypeId: window.google.maps.MapTypeId.ROADMAP
+        });
+
+        coordinates.forEach((coord) => {
+          new window.google.maps.Marker({
+            position: { lat: coord.lat, lng: coord.lng },
+            map,
+            title: coord.label,
+            icon: {
+              url: `http://maps.google.com/mapfiles/ms/icons/${coord.color || 'red'}-dot.png`,
+            },
+          });
+        });
+
+        const polyline = new window.google.maps.Polyline({
+          path: window.google.maps.geometry.encoding.decodePath(lastMessage.map_data.encoded_polyline),
+          geodesic: true,
+          strokeColor: '#FF0000',
+          strokeOpacity: 1.0,
+          strokeWeight: 2
+        });
+        polyline.setMap(map);
+
+        map.fitBounds(bounds);
+      }
     }
   }, [messages]);
 
@@ -85,9 +130,6 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
     "Can you tell me more about the team I'll be working with?",
     "What benefits does the company offer?",
     "What is the expected start date?",
-    "Show me the company video",
-    "What is the dress code?",
-    "Who is the chairman?"
   ];
 
   const handleCopy = (content: string) => {
@@ -236,7 +278,7 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
                         )}
                       </div>
                       {place.map_url && (
-                        <a href={place.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline hover:text-primary/80 transition-colors">
+                        <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline hover:text-primary/80 transition-colors">
                           View on Google Maps
                         </a>
                       )}
@@ -274,6 +316,38 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
                 {mapData.map_url && (
                   <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline hover:text-primary/80 transition-colors">
                     View Directions on Google Maps
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      case "distance":
+        return (
+          <div className="mt-4 p-4 bg-muted rounded-xl shadow-sm border border-border">
+            <div className="flex items-center gap-2 mb-3">
+              <MapPin className="h-5 w-5 text-primary" />
+              <span className="font-semibold text-sm text-foreground">Distance Information</span>
+            </div>
+            <div className="flex-grow">
+              {mapData.llm_response && (
+                <p className="text-sm text-foreground mb-3">{mapData.llm_response}</p>
+              )}
+              <div className="text-sm text-muted-foreground space-y-1">
+                <p><span className="font-medium text-foreground">From:</span> {(mapData.data as { origin: string }).origin}</p>
+                <p><span className="font-medium text-foreground">To:</span> {(mapData.data as { destination: string }).destination}</p>
+                <p><span className="font-medium text-foreground">Distance:</span> {(mapData.data as { distance: string }).distance}</p>
+                <p><span className="font-medium text-foreground">Estimated Travel Time:</span> {(mapData.data as { duration: string }).duration}</p>
+              </div>
+              <div className="mb-4 mt-4">
+                <div
+                  ref={mapRef}
+                  className="w-full h-[300px] rounded-lg"
+                  style={{ display: mapData.coordinates && mapData.encoded_polyline ? 'block' : 'none' }}
+                ></div>
+                {mapData.map_url && (
+                  <a href={mapData.map_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline hover:text-primary/80 transition-colors mt-2 block">
+                    View Route on Google Maps
                   </a>
                 )}
               </div>
@@ -320,19 +394,6 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
         return null;
     }
   };
-
-  const renderMediaData = (mediaData: MediaData) => {
-    if (mediaData.type === "video") {
-      return (
-        <video controls src={mediaData.url} className="mt-3 w-full max-w-md rounded-md" />
-      )
-    } else if (mediaData.type === "image") {
-      return (
-        <img src={mediaData.url} alt="Related Image" className="mt-3 w-full max-w-md rounded-md" />
-      )
-    }
-    return null
-  }
 
   // Helper function to preprocess content for job descriptions and remove markdown symbols
   const preprocessJobDescription = (content: string): string => {
@@ -447,7 +508,6 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
                           <audio controls src={`data:audio/mp3;base64,${message.audio_base64}`} className="mt-3 w-full rounded-md" />
                         )}
                         {message.map_data && renderMapData(message.map_data)}
-                        {message.media_data && renderMediaData(message.media_data)}
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
