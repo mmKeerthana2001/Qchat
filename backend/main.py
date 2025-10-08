@@ -1,3 +1,4 @@
+#main.py
 import os
 import asyncio
 from fastapi import FastAPI, APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Request, Depends, File, UploadFile
@@ -504,7 +505,16 @@ async def process_chat_query(session_id: str, query_req: QueryRequest):
                         "timestamp": time.time(),
                     }
                     if is_map_query:
-                        ws_response["map_data"] = map_data
+                        # Include all map_data fields, including coordinates and encoded_polyline
+                        ws_response["map_data"] = {
+                            "type": map_data.get("type"),
+                            "data": map_data.get("data"),
+                            "map_url": map_data.get("map_url"),
+                            "static_map_url": map_data.get("static_map_url"),
+                            "coordinates": map_data.get("coordinates"),
+                            "llm_response": map_data.get("llm_response"),
+                            "encoded_polyline": map_data.get("encoded_polyline")
+                        }
                     else:
                         ws_response["media_data"] = media_data
                     await ws.send_json(ws_response)
@@ -815,12 +825,17 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                     dest_addr = legs['end_address']
                     encoded_polyline = directions[0]['overview_polyline']['points']
                     map_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origin_addr)}&destination={urllib.parse.quote(dest_addr)}&travelmode=driving"
-                    static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?size=150x112&path=enc:{urllib.parse.quote(encoded_polyline)}&markers=label:Q|color:purple|{source['lat']},{source['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                    static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?size=600x300&path=enc:{urllib.parse.quote(encoded_polyline)}&markers=label:S|color:green|{legs['start_location']['lat']},{legs['start_location']['lng']}|label:D|color:red|{legs['end_location']['lat']},{legs['end_location']['lng']}&key={GOOGLE_MAPS_API_KEY}"
                     map_data = {
                         "type": "directions",
                         "data": steps,
                         "map_url": map_url,
-                        "static_map_url": static_map_url
+                        "static_map_url": static_map_url,
+                        "encoded_polyline": encoded_polyline,
+                        "coordinates": [
+                            {"lat": legs['start_location']['lat'], "lng": legs['start_location']['lng'], "label": origin_addr, "color": "green"},
+                            {"lat": legs['end_location']['lat'], "lng": legs['end_location']['lng'], "label": dest_addr, "color": "red"}
+                        ]
                     }
                 else:
                     raise HTTPException(status_code=404, detail="Directions not found")
@@ -891,7 +906,7 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
             routes_url = "https://routes.googleapis.com/directions/v2:computeRoutes"
             headers = {
                 "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-                "X-Goog-FieldMask": "routes.distanceMeters,routes.duration"
+                "X-Goog-FieldMask": "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline"
             }
             payload = {
                 "origin": {"address": source_addr},
@@ -909,13 +924,14 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                 
                 if route_data.get("routes"):
                     distance_meters = route_data["routes"][0]["distanceMeters"]
-                    duration_seconds = route_data["routes"][0]["duration"]
+                    duration_seconds = int(route_data["routes"][0]["duration"].rstrip("s"))
+                    encoded_polyline = route_data["routes"][0]["polyline"]["encodedPolyline"]
                     distance = f"{distance_meters / 1000:.1f} km"
                     duration = f"{duration_seconds // 60} mins" if duration_seconds < 3600 else f"{duration_seconds // 3600} hr {(duration_seconds % 3600) // 60} mins"
                     origin_addr = source_addr
                     
                     map_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origin_addr)}&destination={urllib.parse.quote(dest_addr)}&travelmode=driving"
-                    static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?center={source['lat']},{source['lng']}&zoom=13&size=150x112&markers=label:Q|color:purple|{source['lat']},{source['lng']}&key={GOOGLE_MAPS_API_KEY}"
+                    static_map_url = f"https://maps.googleapis.com/maps/api/staticmap?size=600x300&path=enc:{urllib.parse.quote(encoded_polyline)}&markers=label:S|color:green|{source['lat']},{source['lng']}|label:D|color:red|{dest_lat},{dest_lng}&key={GOOGLE_MAPS_API_KEY}"
                     
                     map_data_temp = {
                         "type": "distance",
@@ -939,8 +955,9 @@ async def handle_map_query(session_id: str, query_req: QueryRequest, intent_data
                         "llm_response": llm_response,
                         "map_url": map_url,
                         "static_map_url": static_map_url,
+                        "encoded_polyline": encoded_polyline,
                         "coordinates": [
-                            {"lat": source["lat"], "lng": source["lng"], "label": "Origin", "color": "purple"},
+                            {"lat": source["lat"], "lng": source["lng"], "label": "Origin", "color": "green"},
                             {"lat": dest_lat, "lng": dest_lng, "label": dest_name, "color": "red"}
                         ]
                     }

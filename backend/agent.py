@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 from openai import AsyncOpenAI
@@ -33,9 +32,8 @@ class Agent:
             "Show me the company video",
             "What is the dress code?",
             "Who is the chairman?",
+            "Who is on the leadership team?",
             "can u list all quadrant locations",
-            "hey",
-            "hi",
             "hey",
             "hi",
             "Can you tell me more about the team I'll be working with?",
@@ -45,8 +43,9 @@ class Agent:
             "Are there any PGs or restaurants near Quadrant Technologies?",
             "Where are all the Quadrant Technologies offices located?",
             "Show me the company video",
-            "What is the dress code?"
-            
+            "What is the dress code?",
+            "Who is on the leadership team?",
+            "Who is the best employee?"
         ]
         self.quadrant_cities = [
             "Redmond, WA", "Iselin, NJ", "Dallas, TX", "Hyderabad, Telangana",
@@ -60,11 +59,56 @@ class Agent:
         self.video_url = os.getenv("VIDEO_URL")
         self.dress_code_image_url = os.getenv("DRESS_CODE_IMAGE_URL")
         self.president_image_url = os.getenv("PRESIDENT_IMAGE_URL")
+        self.best_employee_image_url = os.getenv("BEST_EMPLOYEE_IMAGE_URL", "http://localhost:8080/assets/keerthana.jpg")
         if not self.president_image_url:
             logger.warning("PRESIDENT_IMAGE_URL not found in .env file, defaulting to empty string")
             self.president_image_url = ""
+        if not self.best_employee_image_url:
+            logger.warning("BEST_EMPLOYEE_IMAGE_URL not found in .env file, defaulting to empty string")
+            self.best_employee_image_url = ""
         logger.info(f"Loaded VIDEO_URL: {self.video_url}")
         logger.info(f"Loaded PRESIDENT_IMAGE_URL: {self.president_image_url}")
+        logger.info(f"Loaded BEST_EMPLOYEE_IMAGE_URL: {self.best_employee_image_url}")
+
+        # Leadership team data
+        self.leadership_team = [
+            {
+                "name": "Vijay Bhaskar Perumal",
+                "title": "Chief Executive Officer",
+                "image_url": os.getenv("LEADERSHIP_VIJAY_BHASKAR_PERUMAL_URL", "")
+            },
+            {
+                "name": "Sai Suresh Medicharla",
+                "title": "Chief Operating Officer",
+                "image_url": os.getenv("LEADERSHIP_SAI_SURESH_MEDICHARLA_URL", "")
+            },
+            {
+                "name": "Ravikumar Nagaraj",
+                "title": "Chief Technology Officer",
+                "image_url": os.getenv("LEADERSHIP_RAVIKUMAR_NAGARAJ_URL", "")
+            },
+            {
+                "name": "Raghava Kothamasu",
+                "title": "Chief Financial Officer",
+                "image_url": os.getenv("LEADERSHIP_RAGHAVA_KOTHAMASU_URL", "")
+            },
+            {
+                "name": "Phani Raj Gollapudi",
+                "title": "Vice President of Engineering",
+                "image_url": os.getenv("LEADERSHIP_PHANI_RAJ_GOLLAPUDI_URL", "")
+            },
+            {
+                "name": "Krishna Bonagiri",
+                "title": "Vice President of Sales",
+                "image_url": os.getenv("LEADERSHIP_KRISHNA_BONAGIRI_URL", "")
+            },
+            {
+                "name": "Gopi Krishna Atmakuri",
+                "title": "Vice President of Human Resources",
+                "image_url": os.getenv("LEADERSHIP_GOPI_KRISHNA_ATMAKURI_URL", "")
+            }
+        ]
+        logger.info(f"Loaded {len(self.leadership_team)} leadership team members")
 
         # Dress item to image URL mapping
         self.dress_images = {
@@ -117,7 +161,7 @@ class Agent:
                 prompt += f"{msg['role'].capitalize()}: {msg['query']}\nAssistant: {msg['response']}\n"
             prompt += f"\nOriginal Query: {query}\nCorrected Query:"
             response = await self.client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "You are a typo correction and intent understanding assistant."},
                     {"role": "user", "content": prompt}
@@ -156,7 +200,6 @@ class Agent:
             new_lines.append(new_line)
         return '\n'.join(new_lines)
     
-
     def format_dos_donts(self, response: str) -> str:
         """Format do's and don'ts in LLM response with markdown, emojis, and aligned bullets."""
         lines = response.split("\n")
@@ -210,7 +253,7 @@ class Agent:
                 "Answer the user's query based on the document content and prior conversation. "
                 "Provide a concise and accurate response. If the query cannot be answered based on the provided text or history, say so clearly. "
                 "Support follow-up questions and topic switches while maintaining context. "
-                "For queries about the president, do not mention any photo or link in the response text."
+                "For queries about the president, best employee, or leadership team, do not mention any photo or link in the response text."
                 "For queries asking for do's and don'ts (e.g., interview tips, dress code, workplace etiquette), structure the response with '#### Do's' and '#### Don'ts' sections containing bullet points starting with a dash (-). Ensure items are unique, concise, properly indented, and avoid duplicates. If applicable, include headers like '## For Male Employees:' or '## For Female Employees:' for dress code, or other relevant headers for the context (e.g., '## Interview Tips'). End with 'If you have any further questions, feel free to ask!'"
             )
             
@@ -240,14 +283,37 @@ class Agent:
             elif intent == "president":
                 media_data = {"type": "image", "url": self.president_image_url} if self.president_image_url else None
                 logger.debug(f"President intent detected, media_data set to: {media_data}")
+            elif intent == "best_employee":
+                answer = "The best employee at Quadrant Technologies is Keerthana, recognized for her outstanding contributions and dedication."
+                media_data = {"type": "image", "url": self.best_employee_image_url} if self.best_employee_image_url else None
+                logger.debug(f"Best employee intent detected, media_data set to: {media_data}")
+                return answer, media_data
+            elif intent == "leadership":
+                # Construct leadership team response
+                answer = "Here is the leadership team of Quadrant Technologies:\n\n"
+                for member in self.leadership_team:
+                    answer += f"- {member['name']}, {member['title']}\n"
+                answer += "\nIf you have any further questions about the company or its leadership, feel free to ask!"
+                media_data = {
+                    "type": "leadership",
+                    "members": [
+                        {
+                            "name": member["name"],
+                            "title": member["title"],
+                            "url": member["image_url"]
+                        } for member in self.leadership_team if member["image_url"]
+                    ]
+                }
+                logger.debug(f"Leadership intent detected, media_data set to: {media_data}")
+                return answer, media_data
 
             response = await self.client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant for analyzing documents with context retention."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=500,
+                max_tokens=300,
                 temperature=0.7
             )
             answer = response.choices[0].message.content.strip()
@@ -380,6 +446,8 @@ class Agent:
                 "'video' (queries related to videos, company videos, or any video content), "
                 "'dress' (queries related to dress code, what to wear, or clothing policies), "
                 "'president' (queries related to the president, company leadership, or president details), "
+                "'best_employee' (queries related to the best employee, employee of the month, or similar), "
+                "'leadership' (queries about the leadership team, executive team, or company leaders), "
                 "'document' (any other general query to be answered from uploaded documents). "
                 "For 'dress' intent, also extract 'gender': 'male' if the query mentions male/men/gents, 'female' if female/women/ladies, else null. "
                 "Output ONLY a valid JSON object. Examples: "
@@ -387,8 +455,9 @@ class Agent:
                 "or {'is_map': true, 'intent': 'distance', 'city': 'Hyderabad, Telangana', 'nearby_type': null, 'origin': null, 'destination': 'airport', 'gender': null} "
                 "or {'is_map': false, 'intent': 'video', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null} "
                 "or {'is_map': false, 'intent': 'dress', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': 'male'} "
-                "or {'is_map': false, 'intent': 'dress', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null} "
                 "or {'is_map': false, 'intent': 'president', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null} "
+                "or {'is_map': false, 'intent': 'best_employee', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null} "
+                "or {'is_map': false, 'intent': 'leadership', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null} "
                 "or {'is_map': false, 'intent': 'document', 'city': null, 'nearby_type': null, 'origin': null, 'destination': null, 'gender': null}"
             )
             prompt += f"\n\nConversation History:\n"
@@ -397,7 +466,7 @@ class Agent:
             prompt += f"\nQuery: {corrected_query}\nJSON Output:"
 
             response = await self.client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "You are a JSON-only responder. Output only a valid JSON object with keys: is_map (bool), intent (string), city (string or null), nearby_type (string or null), origin (string or null), destination (string or null), gender (string or null). No extra text."},
                     {"role": "user", "content": prompt}

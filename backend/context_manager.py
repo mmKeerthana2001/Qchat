@@ -297,7 +297,7 @@ class ContextManager:
             search_result = await self.qdrant_client.search(
                 collection_name=qdrant_collection,
                 query_vector=query_embedding,
-                limit=5
+                limit=3
             )
 
             documents = "\n\n".join(
