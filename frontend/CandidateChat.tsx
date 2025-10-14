@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "@/components/ui/sonner";
-import { Menu, Send, Loader2, User, MapPin, Star, GripVertical, Mic } from "lucide-react";
+import { Menu, Send, Loader2, User, MapPin, Star, GripVertical, Mic, MoreHorizontal } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -53,6 +53,7 @@ interface Message {
   audio_base64?: string;
   map_data?: MapData;
   media_data?: MediaData;
+  isTyping?: boolean; // New property for typing indicator
 }
 
 function CandidateChat() {
@@ -96,6 +97,67 @@ function CandidateChat() {
     "Who is on the leadership team?",
     "Who is the best employee?"
   ];
+
+  // Typing indicator dots animation
+  const getTypingDots = (index: number) => {
+    const dots = ['⠂', '⠆', '⠒', '⢄', '⡀'];
+    return dots[index % dots.length];
+  };
+
+  // Replace the existing TypingIndicator component with this simplified version:
+
+  const TypingIndicator = ({ messageId }: { messageId: string }) => {
+    const [dotIndex, setDotIndex] = useState(0);
+    
+    useEffect(() => {
+      const interval = setInterval(() => {
+        setDotIndex(prev => (prev + 1) % 3);
+      }, 300);
+      
+      return () => clearInterval(interval);
+    }, []);
+
+    return (
+      <div className="flex gap-3 mb-4">
+        <Avatar className="h-8 w-8 ring-2 ring-primary/20">
+          <AvatarFallback className="bg-card border">
+            <img
+              src="/assets/favicon.ico"
+              alt="Quadrant Logo"
+              className="w-6 h-6 object-contain"
+              onError={() => {
+                console.error("Failed to load Quadrant logo for typing indicator");
+              }}
+            />
+          </AvatarFallback>
+        </Avatar>
+        <div className="flex-1 space-y-2">
+          {/* No chat bubble wrapper - just the dots directly */}
+          <div className="flex items-center">
+            <div className="flex space-x-1">
+              {Array.from({ length: 3 }, (_, i) => (
+                <span
+                  key={i}
+                  className={`w-2 h-2 rounded-full bg-muted-foreground animate-bounce ${
+                    i === dotIndex ? 'opacity-100 scale-110' : 'opacity-30'
+                  }`}
+                  style={{
+                    animationDelay: `${i * 150}ms`,
+                    animationDuration: '1.2s'
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">
+              {formatTime(new Date())}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     setIsResizing(true);
@@ -308,6 +370,9 @@ function CandidateChat() {
 
         console.log("Received WebSocket data:", data);
 
+        // Remove typing indicator when real message arrives
+        setMessages(prev => prev.filter(msg => !msg.isTyping));
+
         const newMessage: Message = {
           id: crypto.randomUUID(),
           role: data.role,
@@ -482,7 +547,19 @@ function CandidateChat() {
         content: finalMessage,
         timestamp: new Date(),
       };
+      
+      // Add candidate message
       setMessages(prev => [...prev, candidateMessage]);
+
+      // Add typing indicator immediately after user message
+      const typingMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+        isTyping: true
+      };
+      setMessages(prev => [...prev, typingMessage]);
 
       const response = await fetch(`http://localhost:8000/chat/${sessionId}`, {
         method: "POST",
@@ -497,6 +574,9 @@ function CandidateChat() {
 
       const data = await response.json();
       console.log("HTTP response data:", data);
+
+      // Remove typing indicator
+      setMessages(prev => prev.filter(msg => !msg.isTyping));
 
       const assistantMessage: Message = {
         id: crypto.randomUUID(),
@@ -525,7 +605,8 @@ function CandidateChat() {
           msg =>
             msg.role === "assistant" &&
             msg.content === data.response &&
-            JSON.stringify(msg.media_data) === JSON.stringify(data.media_data)
+            JSON.stringify(msg.media_data) === JSON.stringify(data.media_data) &&
+            !msg.isTyping
         );
         if (isAssistantDuplicate) {
           console.log("Duplicate assistant message ignored:", data);
@@ -538,8 +619,14 @@ function CandidateChat() {
       if (textareaRef.current) textareaRef.current.style.height = "auto";
     } catch (error) {
       console.error("Error sending message:", error);
+      // Remove both candidate message and typing indicator on error
+      setMessages(prev => 
+        prev.filter(msg => 
+          !(msg.role === "candidate" && msg.content === finalMessage) && 
+          !msg.isTyping
+        )
+      );
       toast.error(`Failed to process request: ${error instanceof Error ? error.message : String(error)}`, { duration: 10000 });
-      setMessages(prev => prev.filter(msg => msg.id !== candidateMessage.id));
     } finally {
       setIsLoading(false);
     }
@@ -560,8 +647,8 @@ function CandidateChat() {
   };
 
   const handleSuggestedQuestionClick = (question: string) => {
-    if (!sessionId) {
-      toast.error("No session available. Please wait for the session to initialize.", { duration: 10000 });
+    if (!sessionId || isSessionLoading || isLoading) {
+      toast.error("No session available or processing. Please wait.", { duration: 5000 });
       return;
     }
     setMessage(question);
@@ -602,7 +689,7 @@ function CandidateChat() {
     }
 
     if (content.includes("**") && content.includes("1.")) {
-      const intro = "Here's a clear overview of the available job roles:\n\n";
+      const intro = "\n\n";
       let formattedContent = content.replace(/\*\*(.*?)\*\*/g, '**$1**');
       formattedContent = formattedContent.replace(/(\d+\.\s+)/g, '\n$1');
       const lines = formattedContent.split('\n').map(line => {
@@ -665,8 +752,8 @@ function CandidateChat() {
     switch (mapData.type) {
       case "address":
         return (
-          <div className="mt-4 p-4 bg-muted rounded-xl shadow-sm border border-border">
-            <div className="flex items-center gap-2 mb-3">
+          <div className="mt-2 p-2 bg-muted rounded-xl shadow-sm border border-border">
+            <div className="flex items-center gap-2 mb-2">
               <MapPin className="h-5 w-5 text-primary" />
               <span className="font-semibold text-sm text-foreground">Address</span>
             </div>
@@ -696,12 +783,12 @@ function CandidateChat() {
         );
       case "nearby":
         return (
-          <div className="mt-4 p-4 bg-muted rounded-xl shadow-sm border border-border">
-            <div className="flex items-center gap-2 mb-3">
+          <div className="mt-2 p-2 bg-muted rounded-xl shadow-sm border border-border">
+            <div className="flex items-center gap-2 mb-2">
               <MapPin className="h-5 w-5 text-primary" />
               <span className="font-semibold text-sm text-foreground">Nearby Places</span>
             </div>
-            <div className="mb-4">
+            <div className="mb-3">
               <div
                 ref={mapRef}
                 className="w-full h-[300px] rounded-lg"
@@ -713,7 +800,7 @@ function CandidateChat() {
                 </a>
               )}
             </div>
-            <ul className="space-y-4">
+            <ul className="space-y-3">
               {(mapData.data as { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[]).map(
                 (place, index) => (
                   <li key={index} className="flex flex-row items-start gap-4">
@@ -755,14 +842,14 @@ function CandidateChat() {
         );
       case "distance":
         return (
-          <div className="mt-4 p-4 bg-muted rounded-xl shadow-sm border border-border">
-            <div className="flex items-center gap-2 mb-3">
+          <div className="mt-2 p-2 bg-muted rounded-xl shadow-sm border border-border">
+            <div className="flex items-center gap-2 mb-2">
               <MapPin className="h-5 w-5 text-primary" />
               <span className="font-semibold text-sm text-foreground">Distance Information</span>
             </div>
             <div className="flex-grow">
               {mapData.llm_response && (
-                <p className="text-sm text-foreground mb-3">{mapData.llm_response}</p>
+                <p className="text-sm text-foreground mb-2">{mapData.llm_response}</p>
               )}
               <div className="text-sm text-muted-foreground space-y-1">
                 <p><span className="font-medium text-foreground">From:</span> {(mapData.data as { origin: string }).origin}</p>
@@ -770,7 +857,7 @@ function CandidateChat() {
                 <p><span className="font-medium text-foreground">Distance:</span> {(mapData.data as { distance: string }).distance}</p>
                 <p><span className="font-medium text-foreground">Estimated Travel Time:</span> {(mapData.data as { duration: string }).duration}</p>
               </div>
-              <div className="mb-4 mt-4">
+              <div className="mb-3 mt-3">
                 <div
                   ref={mapRef}
                   className="w-full h-[300px] rounded-lg"
@@ -787,12 +874,12 @@ function CandidateChat() {
         );
       case "multi_location":
         return (
-          <div className="mt-4 p-4 bg-muted rounded-xl shadow-sm border border-border">
-            <div className="flex items-center gap-2 mb-3">
+          <div className="mt-2 p-2 bg-muted rounded-xl shadow-sm border border-border">
+            <div className="flex items-center gap-2 mb-2">
               <MapPin className="h-5 w-5 text-primary" />
               <span className="font-semibold text-sm text-foreground">Office Locations</span>
             </div>
-            <ul className="space-y-4">
+            <ul className="space-y-3">
               {(mapData.data as { city: string; address: string; map_url?: string; static_map_url?: string }[]).map(
                 (loc, index) => (
                   <li key={index} className="flex flex-row items-start gap-4">
@@ -838,7 +925,7 @@ function CandidateChat() {
           <iframe
             src={embedUrl}
             title="Company Video"
-            className="mt-3 w-full max-w-md h-64 rounded-md"
+            className="mt-2 w-full max-w-md h-64 rounded-md"
             frameBorder="0"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowFullScreen
@@ -853,7 +940,7 @@ function CandidateChat() {
         <video
           controls
           src={mediaData.url!}
-          className="mt-3 w-full max-w-md rounded-md"
+          className="mt-2 w-full max-w-md rounded-md"
           onError={() => {
             console.error(`Failed to load video: ${mediaData.url}`);
             toast.error("Failed to load company video", { duration: 5000 });
@@ -870,9 +957,9 @@ function CandidateChat() {
           <DialogTrigger asChild>
             <img
               src={mediaData.url!}
-              alt="Best Employee Image"
-              className="mt-3 w-24 h-24 object-cover rounded-md cursor-pointer"
-              onClick={() => handleImageClick(mediaData.url!, "Best Employee Image")}
+              alt="Dress Code Image"
+              className="mt-2 w-32 h-32 object-cover rounded-md cursor-pointer"
+              onClick={() => handleImageClick(mediaData.url!, "Dress Code Image")}
               onError={() => {
                 console.error(`Failed to load media image: ${mediaData.url}`);
                 toast.error("Failed to load image", { duration: 5000 });
@@ -881,17 +968,17 @@ function CandidateChat() {
           </DialogTrigger>
           <DialogContent className="sm:max-w-md bg-card border border-border rounded-lg shadow-lg">
             <DialogHeader>
-              <DialogTitle className="text-lg font-semibold text-foreground">Best Employee Image</DialogTitle>
+              <DialogTitle className="text-lg font-semibold text-foreground">Dress Code Image</DialogTitle>
             </DialogHeader>
             <div className="flex justify-center p-4">
               {mediaData.url ? (
                 <img
                   src={mediaData.url}
-                  alt="Best Employee Image"
-                  className="w-48 h-48 object-contain rounded-md"
+                  alt="Dress Code Image"
+                  className="w-64 h-64 object-contain rounded-md"
                   onError={() => {
                     console.error(`Failed to load dialog image: ${mediaData.url}`);
-                    toast.error("Failed to load best employee image", { duration: 5000 });
+                    toast.error("Failed to load dress code image", { duration: 5000 });
                   }}
                 />
               ) : (
@@ -903,8 +990,8 @@ function CandidateChat() {
       );
     } else if (mediaData.type === "leadership") {
       return (
-        <div className="mt-4 p-4 bg-muted rounded-xl shadow-sm border border-border">
-          <div className="flex items-center gap-2 mb-3">
+        <div className="mt-2 p-2 bg-muted rounded-xl shadow-sm border border-border">
+          <div className="flex items-center gap-2 mb-2">
             <User className="h-5 w-5 text-primary" />
             <span className="font-semibold text-sm text-foreground">Leadership Team</span>
           </div>
@@ -961,277 +1048,289 @@ function CandidateChat() {
     setIsDialogOpen(true);
   };
 
-  return (
-    <div className="flex h-screen w-full flex-row">
-      <div
-        ref={sidebarRef}
-        className={`fixed inset-y-0 left-0 bg-card/50 backdrop-blur-xl border-r border-border flex flex-col transition-transform duration-300 ease-in-out z-10 ${
-          isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        } md:relative md:translate-x-0`}
-        style={{ width: isSidebarOpen ? `${sidebarWidth}px` : '0px' }}
-      >
-        <div className="flex items-center justify-between p-4 border-b border-border">
-          <h4 className="text-sm font-medium text-foreground truncate">Suggested Questions</h4>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="md:hidden flex-shrink-0"
-            onClick={toggleSidebar}
-          >
-            <Menu className="h-5 w-5" />
-          </Button>
-        </div>
-        <div className="flex-1 overflow-hidden">
-          <ScrollArea className="h-full">
-            <div className="p-4 space-y-2">
-              {suggestedQuestions.map((q, index) => (
-                <Button
-                  key={index}
-                  variant="outline"
-                  size="sm"
-                  className="w-full text-left text-sm text-foreground border-border hover:bg-muted/50 justify-start h-auto py-2 px-3 whitespace-normal"
-                  onClick={() => handleSuggestedQuestionClick(q)}
-                  disabled={isSessionLoading || isLoading}
-                >
-                  <span className="break-words">{q}</span>
-                </Button>
-              ))}
-            </div>
-          </ScrollArea>
-        </div>
-        <div
-          ref={resizeHandleRef}
-          className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors group ${
-            isResizing ? 'bg-primary/40' : ''
-          }`}
-          onMouseDown={handleMouseDown}
-        >
-          <div className="absolute top-1/2 right-0 transform -translate-y-1/2 translate-x-1/2">
-            <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-              <GripVertical className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </div>
-        </div>
-      </div>
+  // Render messages with typing indicator support
+  const renderMessage = (message: Message) => {
+    if (message.isTyping) {
+      return <TypingIndicator messageId={message.id} />;
+    }
 
-      <div className="flex flex-col flex-1" style={{ marginLeft: isSidebarOpen ? 0 : 0 }}>
-        <header className="border-b border-border bg-card/50 backdrop-blur-xl p-4">
-          <div className="max-w-4xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="md:hidden"
-                onClick={toggleSidebar}
-              >
-                <Menu className="h-5 w-5" />
-              </Button>
-              <h1 className="text-lg font-semibold text-foreground">Candidate Chat</h1>
+    if ((message.role === "hr" || message.role === "candidate" || message.role === "system")) {
+      return (
+        <div className={`flex ${message.role === "candidate" ? "justify-end" : "justify-start"} gap-3 mb-4`}>
+          <div className="flex flex-col items-end max-w-[70%]">
+            <div className={`chat-bubble-${message.role} rounded-2xl ${message.role === "candidate" ? "rounded-tr-md" : "rounded-tl-md"} px-1.5 py-0.5 mb-2 ${message.role === "system" ? "bg-gray-100 text-foreground font-semibold text-sm" : "bg-gradient-to-r from-blue-500 to-purple-600 text-primary-foreground"} shadow-sm transition-all duration-300 hover:shadow-md`}>
+              {message.role === "system" ? (
+                <img
+                  src="/assets/favicon.ico"
+                  alt="Quadrant Technologies Logo"
+                  className="inline-block w-6 h-6 mr-2"
+                  onError={() => {
+                    console.error("Failed to load Quadrant logo for system message");
+                    toast.error("Failed to load logo", { duration: 5000 });
+                  }}
+                />
+              ) : (
+                <span className="text-xs font-semibold text-primary-foreground/80">{message.role.toUpperCase()}</span>
+              )}
+              <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
             </div>
-            <Button
-              variant="default"
-              onClick={handleVoiceMode}
-              className="flex items-center gap-2"
-            >
-              <Mic className="h-4 w-4" />
-              <span className="hidden sm:inline">ASK ME</span>
-            </Button>
+            <span className="text-xs text-muted-foreground">
+              {formatTime(message.timestamp)}
+            </span>
           </div>
-        </header>
-
-        <ScrollArea className="flex-1 p-6" ref={scrollAreaRef}>
-          <div className="max-w-4xl mx-auto space-y-6">
-            {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-96 text-center">
-                <div className="w-16 h-16 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mb-4 animate-pulse">
-                  <img
-                    src="/assets/favicon.ico"
-                    alt="Quadrant Technologies Logo"
-                    className="w-8 h-8 object-contain"
-                    onError={() => {
-                      console.error("Failed to load Quadrant logo in welcome section");
-                      toast.error("Failed to load logo", { duration: 5000 });
-                    }}
-                  />
-                </div>
-                <h3 className="text-lg font-semibold mb-2 text-foreground">Welcome to QChat</h3>
-                <p className="text-sm text-muted-foreground">Ask about your application or location details</p>
-              </div>
-            ) : (
-              messages.map((message) => (
-                <div key={message.id} className="animate-fade-in">
-                  {(message.role === "hr" || message.role === "candidate" || message.role === "system") ? (
-                    <div className={`flex ${message.role === "candidate" ? "justify-end" : "justify-start"} gap-3 mb-6`}>
-                      <div className="flex flex-col items-end max-w-[70%]">
-                        <div className={`chat-bubble-${message.role} rounded-2xl ${message.role === "candidate" ? "rounded-tr-md" : "rounded-tl-md"} px-4 py-3 mb-2 ${message.role === "system" ? "bg-gray-100 text-foreground font-semibold text-sm" : "bg-gradient-to-r from-blue-500 to-purple-600 text-primary-foreground"} shadow-sm transition-all duration-300 hover:shadow-md`}>
-                          {message.role === "system" ? (
+          {message.role !== "system" && (
+            <Avatar className="h-8 w-8 ring-2 ring-primary/20">
+              <AvatarFallback className={`bg-gradient-to-r ${message.role === "hr" ? "from-blue-500 to-purple-600" : "from-blue-500 to-purple-600"} text-primary-foreground`}>
+                <User className="h-4 w-4" />
+              </AvatarFallback>
+            </Avatar>
+          )}
+        </div>
+      );
+    } else if (message.role === "assistant") {
+      return (
+        <div className="flex gap-3 mb-4">
+          <Avatar className="h-8 w-8 ring-2 ring-primary/20">
+            <AvatarFallback className="bg-card border">
+              <img
+                src="/assets/favicon.ico"
+                alt="Quadrant Technologies Logo"
+                className="w-6 h-6 object-contain"
+                onError={() => {
+                  console.error("Failed to load Quadrant logo for assistant avatar");
+                  toast.error("Failed to load logo", { duration: 5000 });
+                }}
+              />
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex-1 space-y-2">
+            <div className="chat-bubble-ai rounded-2xl rounded-tl-md px-1.5 py-0.5 bg-card shadow-sm border border-border transition-all duration-300 hover:shadow-md">
+              <div className="prose prose-sm max-w-none">
+                <div className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeRaw]}
+                    components={{
+                      h1: ({ node, ...props }) => <h1 className="text-lg font-bold mt-3 mb-1 text-foreground" {...props} />,
+                      h2: ({ node, ...props }) => <h2 className="text-base font-semibold mt-2 mb-1 text-foreground" {...props} />,
+                      h3: ({ node, ...props }) => <h3 className="text-sm font-medium mt-2 mb-1 text-foreground" {...props} />,
+                      p: ({ node, ...props }) => <p className="text-sm mb-2 text-foreground" {...props} />,
+                      ul: ({ node, ...props }) => <ul className="list-disc pl-4 mb-2 text-sm text-foreground" {...props} />,
+                      ol: ({ node, ...props }) => <ol className="list-decimal pl-4 mb-2 text-sm text-foreground" {...props} />,
+                      li: ({ node, ...props }) => <li className="mb-1 text-foreground flex items-start gap-2" {...props} />,
+                      strong: ({ node, ...props }) => <strong className="font-semibold text-foreground" {...props} />,
+                      em: ({ node, ...props }) => <em className="italic text-foreground" {...props} />,
+                      a: ({ node, ...props }) => <a className="text-primary underline hover:text-primary/80 transition-colors" target="_blank" rel="noopener noreferrer" {...props} />,
+                      code: ({ node, ...props }) => <code className="bg-muted px-1 py-0.5 rounded text-sm text-foreground" {...props} />,
+                      pre: ({ node, ...props }) => <pre className="bg-muted p-2 rounded-lg overflow-x-auto text-sm text-foreground" {...props} />,
+                      img: ({ node, ...props }) => (
+                        <Dialog open={isDialogOpen && selectedImage?.src === props.src} onOpenChange={(open) => {
+                          if (DEBUG) console.log(`Dialog open state changed: ${open}`);
+                          setIsDialogOpen(open);
+                          if (!open) setSelectedImage(null);
+                        }}>
+                          <DialogTrigger asChild>
                             <img
-                              src="/assets/favicon.ico"
-                              alt="Quadrant Technologies Logo"
-                              className="inline-block w-6 h-6 mr-2"
+                              {...props}
+                              className="inline-block w-8 h-8 object-cover rounded-md ml-2 cursor-pointer hover:opacity-80 transition-opacity"
+                              onClick={() => {
+                                if (DEBUG) console.log(`Triggering dialog for image: ${props.src}`);
+                                handleImageClick(props.src || '', props.alt || '');
+                              }}
                               onError={() => {
-                                console.error("Failed to load Quadrant logo for system message");
-                                toast.error("Failed to load logo", { duration: 5000 });
+                                console.error(`Failed to load inline image: ${props.src}`);
+                                toast.error(`Failed to load image: ${props.alt || 'Dress item'}`, { duration: 5005 });
                               }}
                             />
-                          ) : (
-                            <span className="text-xs font-semibold text-primary-foreground/80">{message.role.toUpperCase()}</span>
-                          )}
-                          <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-                        </div>
-                        <span className="text-xs text-muted-foreground">
-                          {formatTime(message.timestamp)}
-                        </span>
-                      </div>
-                      {message.role !== "system" && (
-                        <Avatar className="h-8 w-8 ring-2 ring-primary/20">
-                          <AvatarFallback className={`bg-gradient-to-r ${message.role === "hr" ? "from-blue-500 to-purple-600" : "from-blue-500 to-purple-600"} text-primary-foreground`}>
-                            <User className="h-4 w-4" />
-                          </AvatarFallback>
-                        </Avatar>
-                      )}
-                    </div>
-                  ) : message.role === "assistant" ? (
-                    <div className="flex gap-3 mb-6">
-                      <Avatar className="h-8 w-8 ring-2 ring-primary/20">
-                        <AvatarFallback className="bg-card border">
-                          <img
-                            src="/assets/favicon.ico"
-                            alt="Quadrant Technologies Logo"
-                            className="w-6 h-6 object-contain"
-                            onError={() => {
-                              console.error("Failed to load Quadrant logo for assistant avatar");
-                              toast.error("Failed to load logo", { duration: 5000 });
-                            }}
-                          />
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1 space-y-2">
-                        <div className="chat-bubble-ai rounded-2xl rounded-tl-md px-4 py-3 bg-card shadow-sm border border-border transition-all duration-300 hover:shadow-md">
-                          <div className="prose prose-sm max-w-none">
-                            <div className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">
-                              <ReactMarkdown
-                                remarkPlugins={[remarkGfm]}
-                                rehypePlugins={[rehypeRaw]}
-                                components={{
-                                  h1: ({ node, ...props }) => <h1 className="text-lg font-bold mt-4 mb-2 text-foreground" {...props} />,
-                                  h2: ({ node, ...props }) => <h2 className="text-base font-semibold mt-3 mb-2 text-foreground" {...props} />,
-                                  h3: ({ node, ...props }) => <h3 className="text-sm font-medium mt-2 mb-1 text-foreground" {...props} />,
-                                  p: ({ node, ...props }) => <p className="text-sm mb-3 text-foreground" {...props} />,
-                                  ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-3 text-sm text-foreground" {...props} />,
-                                  ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-3 text-sm text-foreground" {...props} />,
-                                  li: ({ node, ...props }) => {
-                                    const content = props.children?.toString() || '';
-                                    const className = content.includes('✅')
-                                      ? 'mb-2 text-foreground flex items-start gap-2 text-green-600'
-                                      : content.includes('❌')
-                                      ? 'mb-2 text-foreground flex items-start gap-2 text-red-600'
-                                      : 'mb-2 text-foreground flex items-start gap-2';
-                                    return <li className={className} {...props} />;
-                                  },
-                                  strong: ({ node, ...props }) => <strong className="font-semibold text-foreground" {...props} />,
-                                  em: ({ node, ...props }) => <em className="italic text-foreground" {...props} />,
-                                  a: ({ node, ...props }) => <a className="text-primary underline hover:text-primary/80 transition-colors" target="_blank" rel="noopener noreferrer" {...props} />,
-                                  code: ({ node, ...props }) => <code className="bg-muted px-1 py-0.5 rounded text-sm text-foreground" {...props} />,
-                                  pre: ({ node, ...props }) => <pre className="bg-muted p-3 rounded-lg overflow-x-auto text-sm text-foreground" {...props} />,
-                                  img: ({ node, ...props }) => (
-                                    <Dialog open={isDialogOpen && selectedImage?.src === props.src} onOpenChange={(open) => {
-                                      if (DEBUG) console.log(`Dialog open state changed: ${open}`);
-                                      setIsDialogOpen(open);
-                                      if (!open) setSelectedImage(null);
-                                    }}>
-                                      <DialogTrigger asChild>
-                                        <img
-                                          {...props}
-                                          className="inline-block w-6 h-6 object-cover rounded-md ml-2 cursor-pointer hover:opacity-80 transition-opacity"
-                                          onClick={() => {
-                                            if (DEBUG) console.log(`Triggering dialog for image: ${props.src}`);
-                                            handleImageClick(props.src || '', props.alt || '');
-                                          }}
-                                          onError={() => {
-                                            console.error(`Failed to load inline image: ${props.src}`);
-                                            toast.error(`Failed to load image: ${props.alt || 'Dress item'}`, { duration: 5005 });
-                                          }}
-                                        />
-                                      </DialogTrigger>
-                                      <DialogContent className="sm:max-w-md bg-card border border-border rounded-lg shadow-lg transition-all duration-300">
-                                        <DialogHeader>
-                                          <DialogTitle className="text-lg font-semibold text-foreground">{selectedImage?.alt || 'Dress Item'}</DialogTitle>
-                                        </DialogHeader>
-                                        <div className="flex justify-center p-4">
-                                          {selectedImage?.src ? (
-                                            <img
-                                              src={selectedImage.src}
-                                              alt={selectedImage.alt || 'Dress Item'}
-                                              className="w-48 h-48 object-contain rounded-md"
-                                              onError={() => {
-                                                console.error(`Failed to load dialog image: ${selectedImage.src}`);
-                                                toast.error(`Failed to load image: ${selectedImage.alt || 'Dress item'}`, { duration: 5005 });
-                                              }}
-                                            />
-                                          ) : (
-                                            <p className="text-sm text-muted-foreground">No image available</p>
-                                          )}
-                                        </div>
-                                      </DialogContent>
-                                    </Dialog>
-                                  ),
-                                }}
-                              >
-                                {DOMPurify.sanitize(preprocessJobDescription(message.content, message.media_data))}
-                              </ReactMarkdown>
+                          </DialogTrigger>
+                          <DialogContent className="sm:max-w-md bg-card border border-border rounded-lg shadow-lg transition-all duration-300">
+                            <DialogHeader>
+                              <DialogTitle className="text-lg font-semibold text-foreground">{selectedImage?.alt || 'Dress Item'}</DialogTitle>
+                            </DialogHeader>
+                            <div className="flex justify-center p-4">
+                              {selectedImage?.src ? (
+                                <img
+                                  src={selectedImage.src}
+                                  alt={selectedImage.alt || 'Dress Item'}
+                                  className="w-64 h-64 object-contain rounded-md"
+                                  onError={() => {
+                                    console.error(`Failed to load dialog image: ${selectedImage.src}`);
+                                    toast.error(`Failed to load image: ${selectedImage.alt || 'Dress item'}`, { duration: 5005 });
+                                  }}
+                                />
+                              ) : (
+                                <p className="text-sm text-muted-foreground">No image available</p>
+                              )}
                             </div>
-                            {message.audio_base64 && (
-                              <audio controls src={`data:audio/mp3;base64,${message.audio_base64}`} className="mt-3 w-full rounded-md" />
-                            )}
-                            {message.map_data && renderMapData(message.map_data)}
-                            {message.media_data && renderMediaData(message.media_data)}
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-muted-foreground">
-                            {formatTime(message.timestamp)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
+                          </DialogContent>
+                        </Dialog>
+                      ),
+                    }}
+                  >
+                    {DOMPurify.sanitize(preprocessJobDescription(message.content, message.media_data))}
+                  </ReactMarkdown>
                 </div>
-              ))
-            )}
+                {message.audio_base64 && (
+                  <audio controls src={`data:audio/mp3;base64,${message.audio_base64}`} className="mt-2 w-full rounded-md" />
+                )}
+                {message.map_data && renderMapData(message.map_data)}
+                {message.media_data && renderMediaData(message.media_data)}
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">
+                {formatTime(message.timestamp)}
+              </span>
+            </div>
           </div>
-        </ScrollArea>
+        </div>
+      );
+    }
+    return null;
+  };
 
-        <div className="border-t border-border bg-card/50 backdrop-blur-xl p-4">
-          <div className="max-w-4xl mx-auto">
-            <form onSubmit={handleSubmit} className="flex items-end gap-2">
-              <div className="flex-1">
-                <Textarea
-                  ref={textareaRef}
-                  value={message}
-                  onChange={handleTextareaChange}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Type your message..."
-                  className="min-h-[40px] max-h-[200px] resize-none"
-                  disabled={isLoading}
-                />
+  return (
+    <>
+      
+      
+      <div className="flex h-screen w-full flex-row">
+        <div
+          ref={sidebarRef}
+          className={`fixed inset-y-0 left-0 bg-card/50 backdrop-blur-xl border-r border-border flex flex-col transition-transform duration-300 ease-in-out z-10 ${
+            isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          } md:relative md:translate-x-0`}
+          style={{ width: isSidebarOpen ? `${sidebarWidth}px` : '0px' }}
+        >
+          <div className="flex items-center justify-between p-4 border-b border-border">
+            <h4 className="text-sm font-medium text-foreground truncate">Suggested Questions</h4>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden flex-shrink-0"
+              onClick={toggleSidebar}
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <ScrollArea className="h-full">
+              <div className="p-4 space-y-2">
+                {suggestedQuestions.map((q, index) => (
+                  <Button
+                    key={index}
+                    variant="outline"
+                    size="sm"
+                    className="w-full text-left text-sm text-foreground border-border hover:bg-muted/50 justify-start h-auto py-2 px-3 whitespace-normal disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={() => handleSuggestedQuestionClick(q)}
+                    disabled={isSessionLoading || isLoading}
+                  >
+                    <span className="break-words">{q}</span>
+                  </Button>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+          <div
+            ref={resizeHandleRef}
+            className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors group ${
+              isResizing ? 'bg-primary/40' : ''
+            }`}
+            onMouseDown={handleMouseDown}
+          >
+            <div className="absolute top-1/2 right-0 transform -translate-y-1/2 translate-x-1/2">
+              <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                <GripVertical className="h-4 w-4 text-muted-foreground" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col flex-1" style={{ marginLeft: isSidebarOpen ? 0 : 0 }}>
+          <header className="border-b border-border bg-card/50 backdrop-blur-xl p-4">
+            <div className="max-w-4xl mx-auto flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="md:hidden"
+                  onClick={toggleSidebar}
+                >
+                  <Menu className="h-5 w-5" />
+                </Button>
+                <h1 className="text-lg font-semibold text-foreground">Candidate Chat</h1>
               </div>
               <Button
-                type="submit"
-                size="icon"
-                disabled={isLoading || !message.trim()}
+                variant="default"
+                onClick={handleVoiceMode}
+                className="flex items-center gap-2"
+                disabled={isLoading}
               >
-                {isLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
+                <Mic className="h-4 w-4" />
+                <span className="hidden sm:inline">ASK ME</span>
               </Button>
-            </form>
+            </div>
+          </header>
+
+          <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
+            <div className="max-w-4xl mx-auto space-y-4">
+              {messages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-96 text-center">
+                  <div className="w-16 h-16 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mb-4 animate-pulse">
+                    <img
+                      src="/assets/favicon.ico"
+                      alt="Quadrant Technologies Logo"
+                      className="w-8 h-8 object-contain"
+                      onError={() => {
+                        console.error("Failed to load Quadrant logo in welcome section");
+                        toast.error("Failed to load logo", { duration: 5000 });
+                      }}
+                    />
+                  </div>
+                  <h3 className="text-lg font-semibold mb-2 text-foreground">Welcome to QChat</h3>
+                  <p className="text-sm text-muted-foreground">Ask about your application or location details</p>
+                </div>
+              ) : (
+                messages.map((message) => (
+                  <div key={message.id} className="animate-fade-in">
+                    {renderMessage(message)}
+                  </div>
+                ))
+              )}
+            </div>
+          </ScrollArea>
+
+          <div className="border-t border-border bg-card/50 backdrop-blur-xl p-4">
+            <div className="max-w-4xl mx-auto">
+              <form onSubmit={handleSubmit} className="flex items-end gap-2">
+                <div className="flex-1">
+                  <Textarea
+                    ref={textareaRef}
+                    value={message}
+                    onChange={handleTextareaChange}
+                    onKeyDown={handleKeyDown}
+                    placeholder={isLoading ? "Processing..." : "Type your message..."}
+                    className="min-h-[40px] max-h-[200px] resize-none"
+                    disabled={isLoading}
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  size="icon"
+                  disabled={isLoading || !message.trim()}
+                  className={isLoading ? "animate-pulse" : ""}
+                >
+                  {isLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                </Button>
+              </form>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 

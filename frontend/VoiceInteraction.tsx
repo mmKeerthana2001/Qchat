@@ -1,11 +1,10 @@
- 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faMicrophone, faStop, faSpinner, faArrowLeft, faPause, faPlay } from '@fortawesome/free-solid-svg-icons';
 import './VoiceInteraction.css';
- 
+
 interface Message {
   role: string;
   query: string;
@@ -15,7 +14,7 @@ interface Message {
   map_data?: any;
   media_data?: { type: string; url: string };
 }
- 
+
 const VoiceInteraction: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -25,18 +24,34 @@ const VoiceInteraction: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [currentAudioType, setCurrentAudioType] = useState<'none' | 'preliminary1' | 'preliminary2' | 'response'>('none');
+  const [currentAudioType, setCurrentAudioType] = useState<'none' | 'preliminary' | 'delay' | 'response'>('none');
+  const [queryCount, setQueryCount] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const secondaryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const secondaryTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Renamed from delayTimeoutRef to match reference
   const reconnectAttempts = useRef<number>(0);
   const maxReconnectAttempts = 3;
-  const reconnectInterval = 7000; // 5 seconds
- 
+  const reconnectInterval = 7000;
+
+  // Array of preliminary response audio files in sequence
+  const preliminaryAudios = [
+    '/static/preliminary_response.mp3',
+    '/static/preliminary_response_a.mp3',
+    '/static/preliminary_response_b.mp3',
+    '/static/preliminary_response_c.mp3',
+    '/static/preliminary_response_d.mp3',
+    '/static/preliminary_response_e.mp3'
+  ];
+
+  const getNextPreliminaryAudio = () => {
+    const index = queryCount % preliminaryAudios.length;
+    return preliminaryAudios[index];
+  };
+
   const connectWebSocket = useCallback(() => {
     if (!sessionId) return;
- 
+
     socketRef.current = new WebSocket(`ws://localhost:8000/ws/voice/${sessionId}`);
     socketRef.current.onopen = () => {
       console.log(`Voice WebSocket connected for session: ${sessionId}`);
@@ -49,7 +64,7 @@ const VoiceInteraction: React.FC = () => {
       }, 30000);
       socketRef.current.onclose = () => clearInterval(pingInterval);
     };
- 
+
     socketRef.current.onmessage = async (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -61,6 +76,11 @@ const VoiceInteraction: React.FC = () => {
           setError(`WebSocket error: ${data.error}`);
           setIsProcessing(false);
           setIsRecording(false);
+          // Clear secondary timeout on error
+          if (secondaryTimeoutRef.current) {
+            clearTimeout(secondaryTimeoutRef.current);
+            secondaryTimeoutRef.current = null;
+          }
           return;
         }
         // Only process assistant responses with audio_base64
@@ -91,12 +111,12 @@ const VoiceInteraction: React.FC = () => {
         setError('Failed to process incoming voice message.');
       }
     };
- 
+
     socketRef.current.onerror = (err) => {
       console.error('Voice WebSocket error:', err);
       setError('WebSocket connection error. Attempting to reconnect...');
     };
- 
+
     socketRef.current.onclose = (event) => {
       console.log(`Voice WebSocket closed for session: ${sessionId}`, event);
       if (event.code === 1008) {
@@ -109,17 +129,17 @@ const VoiceInteraction: React.FC = () => {
       }
     };
   }, [sessionId]);
- 
+
   useEffect(() => {
     const queryParams = new URLSearchParams(location.search);
-    const sessionId = queryParams.get('sessionId');
+    const sessionIdParam = queryParams.get('sessionId');
     const token = queryParams.get('token');
-    if (!sessionId || !token) {
+    if (!sessionIdParam || !token) {
       setError('Missing session ID or token. Please access via the chat page.');
       return;
     }
-    setSessionId(sessionId);
- 
+    setSessionId(sessionIdParam);
+
     const validateToken = async () => {
       try {
         await axios.get('http://localhost:8000/validate-token/', { params: { token } });
@@ -129,9 +149,9 @@ const VoiceInteraction: React.FC = () => {
       }
     };
     validateToken();
- 
+
     connectWebSocket();
- 
+
     return () => {
       socketRef.current?.close();
       if (secondaryTimeoutRef.current) {
@@ -139,11 +159,13 @@ const VoiceInteraction: React.FC = () => {
       }
     };
   }, [location.search, connectWebSocket]);
- 
+
   const playPreliminaryResponse = () => {
     if (audioRef.current) {
-      audioRef.current.src = '/static/preliminary_response.mp3';
-      setCurrentAudioType('preliminary1');
+      const audioPath = getNextPreliminaryAudio();
+      console.log(`Playing preliminary audio ${queryCount + 1}: ${audioPath}`);
+      audioRef.current.src = audioPath;
+      setCurrentAudioType('preliminary');
       audioRef.current.play()
         .then(() => {
           setIsPlaying(true);
@@ -151,43 +173,51 @@ const VoiceInteraction: React.FC = () => {
         })
         .catch(err => {
           console.error('Error playing preliminary response:', err);
+          setError(`Failed to play preliminary audio: ${audioPath}`);
         });
     }
   };
- 
-  const playSecondaryResponse = () => {
+
+  const playDelayResponse = () => {
     if (audioRef.current) {
       audioRef.current.src = '/static/preliminary_response_1.mp3';
-      setCurrentAudioType('preliminary2');
+      setCurrentAudioType('delay');
       audioRef.current.play()
         .then(() => {
           setIsPlaying(true);
           setIsPaused(false);
         })
         .catch(err => {
-          console.error('Error playing secondary response:', err);
+          console.error('Error playing delay response:', err);
         });
     }
   };
- 
+
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       const audioChunks: Blob[] = [];
- 
+
       mediaRecorderRef.current.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunks.push(event.data);
         }
       };
- 
+
       mediaRecorderRef.current.onstop = async () => {
         if (audioChunks.length === 0) {
           setError('No audio recorded. Please try again.');
           setIsProcessing(false);
           return;
         }
+        
+        setQueryCount(prev => {
+          const newCount = prev + 1;
+          console.log(`User query #${newCount}`);
+          return newCount;
+        });
+        
         setIsProcessing(true);
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
         const arrayBuffer = await audioBlob.arrayBuffer();
@@ -197,27 +227,34 @@ const VoiceInteraction: React.FC = () => {
             ''
           )
         );
+        
         if (socketRef.current?.readyState === WebSocket.OPEN) {
           socketRef.current.send(
             JSON.stringify({
               type: 'audio',
               audio_data: base64Audio,
               timestamp: Date.now() / 1000,
+              query_count: queryCount + 1
             })
           );
+          
           playPreliminaryResponse();
+          
+          // Main timeout for no response
           setTimeout(() => {
             if (isProcessing) {
               setError('No response from server. Please try again.');
               setIsProcessing(false);
             }
-          }, 10000);
+          }, 15000);
         } else {
           setError('WebSocket is not connected. Please try again.');
           setIsProcessing(false);
         }
+        
+        stream.getTracks().forEach(track => track.stop());
       };
- 
+
       mediaRecorderRef.current.start(1000);
       setIsRecording(true);
     } catch (err: any) {
@@ -225,15 +262,14 @@ const VoiceInteraction: React.FC = () => {
       setError('Failed to access microphone. Please check permissions.');
     }
   };
- 
+
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
       setIsRecording(false);
     }
   };
- 
+
   const toggleRecording = () => {
     if (isRecording) {
       stopRecording();
@@ -241,7 +277,7 @@ const VoiceInteraction: React.FC = () => {
       startRecording();
     }
   };
- 
+
   const stopResponse = () => {
     if (audioRef.current) {
       audioRef.current.pause();
@@ -255,7 +291,7 @@ const VoiceInteraction: React.FC = () => {
       }
     }
   };
- 
+
   const togglePause = () => {
     if (audioRef.current) {
       if (isPaused) {
@@ -269,28 +305,29 @@ const VoiceInteraction: React.FC = () => {
       }
     }
   };
- 
+
   const handleAudioEnded = () => {
     setIsPlaying(false);
     setIsPaused(false);
     if (isProcessing) {
-      if (currentAudioType === 'preliminary1') {
+      if (currentAudioType === 'preliminary') {
+        // Set 4-second delay for delay audio (adapted from reference's 7-second logic)
         secondaryTimeoutRef.current = setTimeout(() => {
           if (isProcessing) {
-            playSecondaryResponse();
+            playDelayResponse();
           }
-        }, 7000);
+        }, 4000); // Changed from 7000 to 4000 for 4 seconds
       }
-      // For 'preliminary2', do nothing additional for now
+      // For 'delay', do nothing additional
     }
     setCurrentAudioType('none');
   };
- 
+
   const handleBack = () => {
     const token = new URLSearchParams(location.search).get('token');
     navigate(`/candidate-chat?token=${token}`);
   };
- 
+
   const getStatusText = () => {
     if (isRecording) return 'Listening...';
     if (isProcessing) return 'Thinking...';
@@ -298,18 +335,31 @@ const VoiceInteraction: React.FC = () => {
     if (isPaused) return 'Paused';
     return 'Speak your question, and I\'ll respond with voice.';
   };
- 
+
   const getBlobClass = () => {
     if (isRecording) return 'blob listening';
     if (isProcessing) return 'blob thinking';
     if (isPlaying) return 'blob speaking';
     return 'blob idle';
   };
- 
+
   if (error) {
-    return <div className="text-red-500 text-center p-4 bg-black h-screen flex items-center justify-center">{error}</div>;
+    return (
+      <div className="text-red-500 text-center p-4 bg-black h-screen flex items-center justify-center">
+        <div>
+          <h2 className="text-lg mb-4">Error</h2>
+          <p>{error}</p>
+          <button
+            onClick={handleBack}
+            className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white"
+          >
+            Back to Chat
+          </button>
+        </div>
+      </div>
+    );
   }
- 
+
   return (
     <div className="flex flex-col h-screen bg-black text-white">
       <div className="p-4 flex items-center">
@@ -323,12 +373,14 @@ const VoiceInteraction: React.FC = () => {
         <img src="/assets/favicon.ico" alt="Quadrant Logo" className="h-8 w-8 mr-2" />
         <h1 className="text-xl font-bold">Voice Interaction</h1>
       </div>
+      
       <div className="flex-1 flex flex-col items-center justify-center p-4">
         <div className={getBlobClass()}></div>
         <div className="mt-4 text-gray-400 text-center">
           {getStatusText()}
         </div>
       </div>
+      
       <div className="p-4 flex justify-center items-center space-x-4 bg-black">
         <button
           onClick={toggleRecording}
@@ -369,14 +421,19 @@ const VoiceInteraction: React.FC = () => {
           <FontAwesomeIcon icon={faStop} size="lg" />
         </button>
       </div>
+      
       <audio
         ref={audioRef}
         onPlay={() => setIsPlaying(true)}
         onEnded={handleAudioEnded}
+        onError={(e) => {
+          console.error('Audio playback error:', e);
+          setError('Failed to play audio file');
+          setIsPlaying(false);
+        }}
       />
     </div>
   );
 };
- 
+
 export default VoiceInteraction;
- 
