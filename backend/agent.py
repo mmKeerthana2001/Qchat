@@ -201,7 +201,7 @@ class Agent:
         return '\n'.join(new_lines)
     
     def format_dos_donts(self, response: str) -> str:
-        """Format do's and don'ts in LLM response with markdown, emojis, and aligned bullets."""
+        """Format do's and don'ts in LLM response with markdown and aligned bullets."""
         lines = response.split("\n")
         formatted = []
         in_dos, in_donts = False, False
@@ -231,7 +231,9 @@ class Agent:
             elif (stripped.startswith("-") or stripped.startswith("*")) and (in_dos or in_donts):
                 item = line[1:].strip()
                 if item and item.lower() not in seen_items:  # Avoid duplicates
-                    formatted.append(f"  - {'✅' if in_dos else '❌'} {item}")
+                    # Bold for Do's, unbold for Don'ts
+                    formatted_item = f"  - **{item}**" if in_dos else f"  - {item}"
+                    formatted.append(formatted_item)
                     seen_items.add(item.lower())
             # Preserve other lines (e.g., empty lines or non-list content)
             else:

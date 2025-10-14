@@ -290,7 +290,9 @@ class ContextManager:
             if not session_data:
                 raise ValueError(f"Session {session_id} not found")
 
-            history = session_data.get("chat_history", [])[-10:]
+            history = session_data.get("chat_history", [])
+            logger.info(f"Before processing query, history length: {len(history)}, last 2 entries: {history[-2:]}")
+
             query_embedding = self.embedder.encode(query, convert_to_numpy=True).tolist()
 
             qdrant_collection = f"docs_{session_id}"
@@ -319,6 +321,7 @@ class ContextManager:
                 logger.error(f"Agent processing error for session {session_id}: {str(e)}")
                 raise
 
+            # Append user query
             history.append({
                 "role": role,
                 "query": query,
@@ -329,6 +332,7 @@ class ContextManager:
                 "map_data": None,
                 "media_data": None
             })
+            # Append assistant response
             history.append({
                 "role": "assistant",
                 "query": "",
@@ -339,13 +343,15 @@ class ContextManager:
                 "map_data": None,
                 "media_data": media_data
             })
+
+            # Keep last 20 entries to avoid truncating recent user queries
             await doc_collection.update_one(
                 {"session_id": session_id},
-                {"$set": {"chat_history": history[-10:], "updated_at": time.time()}}
+                {"$set": {"chat_history": history[-20:], "updated_at": time.time()}}
             )
-            logger.info(f"Updated chat history for session {session_id} with query and response")
+            logger.info(f"Updated chat history for session {session_id}, new history length: {len(history[-20:])}, last 2 entries: {history[-2:]}")
 
-            return response, media_data, history
+            return response, media_data, history[-20:]
 
         except Exception as e:
             logger.error(f"Error processing query for session {session_id}: {str(e)}")
@@ -359,11 +365,13 @@ class ContextManager:
             if not session_data:
                 raise ValueError(f"Session {session_id} not found")
 
-            history = session_data.get("chat_history", [])[-10:]
+            history = session_data.get("chat_history", [])
+            logger.info(f"Before processing map query, history length: {len(history)}, last 2 entries: {history[-2:]}")
 
             agent = Agent()
             response = await agent.process_map_query(map_data, query, role)
 
+            # Append user query
             history.append({
                 "role": role,
                 "query": query,
@@ -374,6 +382,7 @@ class ContextManager:
                 "audio_base64": None,
                 "media_data": None
             })
+            # Append assistant response
             history.append({
                 "role": "assistant",
                 "query": "",
@@ -384,13 +393,15 @@ class ContextManager:
                 "audio_base64": None,
                 "media_data": None
             })
+
+            # Keep last 20 entries to avoid truncating recent user queries
             await doc_collection.update_one(
                 {"session_id": session_id},
-                {"$set": {"chat_history": history[-10:], "updated_at": time.time()}}
+                {"$set": {"chat_history": history[-20:], "updated_at": time.time()}}
             )
-            logger.info(f"Updated chat history with map query and response for session {session_id}")
+            logger.info(f"Updated chat history with map query for session {session_id}, new history length: {len(history[-20:])}, last 2 entries: {history[-2:]}")
 
-            return response, history
+            return response, history[-20:]
         except Exception as e:
             logger.error(f"Error processing map query for session {session_id}: {str(e)}")
             raise
