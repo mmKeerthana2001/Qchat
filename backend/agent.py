@@ -33,19 +33,8 @@ class Agent:
             "What is the dress code?",
             "Who is the chairman?",
             "Who is on the leadership team?",
-            "can u list all quadrant locations",
-            "hey",
-            "hi",
-            "Can you tell me more about the team I'll be working with?",
-            "What benefits does the company offer?",
-            "What is the expected start date?",
-            "What is the address of Quadrant Technologies?",
-            "Are there any PGs or restaurants near Quadrant Technologies?",
-            "Where are all the Quadrant Technologies offices located?",
-            "Show me the company video",
-            "What is the dress code?",
-            "Who is on the leadership team?",
-            "Who is the best employee?"
+            "can u list all quadrant locations"
+          
         ]
         self.quadrant_cities = [
             "Redmond, WA", "Iselin, NJ", "Dallas, TX", "Hyderabad, Telangana",
@@ -70,42 +59,212 @@ class Agent:
         logger.info(f"Loaded PRESIDENT_IMAGE_URL: {self.president_image_url}")
         logger.info(f"Loaded BEST_EMPLOYEE_IMAGE_URL: {self.best_employee_image_url}")
 
-        # Leadership team data
+        # Complete Leadership team data in exact order
         self.leadership_team = [
             {
-                "name": "Vijay Bhaskar Perumal",
-                "title": "Chief Executive Officer",
-                "image_url": os.getenv("LEADERSHIP_VIJAY_BHASKAR_PERUMAL_URL", "")
+                "name": "Vamshi Reddy",
+                "title": "CEO",
+                "image_url": os.getenv("LEADERSHIP_VAMSHI_REDDY_CEO_1_URL", "")
+            },
+            {
+                "name": "Bhaskar Gangipamula",
+                "title": "President",
+                "image_url": os.getenv("LEADERSHIP_BHASKAR_GANGIPAMULA_PRESIDENT_2_URL", "")
+            },
+            {
+                "name": "Ram Paluri",
+                "title": "Chairman",
+                "image_url": os.getenv("LEADERSHIP_RAM_PALURI_CHAIRMAN_3_URL", "")
+            },
+            {
+                "name": "Susmitha Reddy",
+                "title": "Managing Director",
+                "image_url": os.getenv("LEADERSHIP_SUSMITHA_REDDY_MANAGING_DIRECTOR_MD1_URL", "")
+            },
+            {
+                "name": "Jyothi Gangipamula",
+                "title": "Managing Director",
+                "image_url": os.getenv("LEADERSHIP_JYOTHI_GANGIPAMULA_MANAGING_DIRECTORMD2_URL", "")
+            },
+            {
+                "name": "Shilpa Paluri",
+                "title": "Managing Director",
+                "image_url": os.getenv("LEADERSHIP_SHILPA_PALURI_MANAGING_DIRECTORMD3_URL", "")
             },
             {
                 "name": "Sai Suresh Medicharla",
-                "title": "Chief Operating Officer",
+                "title": "Corporate Vice President – Global Sales & Solutions",
                 "image_url": os.getenv("LEADERSHIP_SAI_SURESH_MEDICHARLA_URL", "")
             },
             {
-                "name": "Ravikumar Nagaraj",
-                "title": "Chief Technology Officer",
-                "image_url": os.getenv("LEADERSHIP_RAVIKUMAR_NAGARAJ_URL", "")
+                "name": "Kaivalya L Hanswadkar",
+                "title": "Executive Vice President – Growth & Strategy",
+                "image_url": os.getenv("LEADERSHIP_KAIVALYA_L_HANSWADKAR_EXECUTIVE_VICE_PRESIDENT_GROWTH_STRATEGYLD2_URL", "")
+            },
+            {
+                "name": "Sunil Gundrathi",
+                "title": "Sr. Vice President – Business Operations & Strategy",
+                "image_url": os.getenv("LEADERSHIP_SUNIL_GUNDRATHI_SR_VICE_PRESIDENT_BUSINESS_OPERATIONS_STRATEGYLD3_URL", "")
+            },
+            {
+                "name": "Krishna Bonagiri",
+                "title": "Senior Vice President – Engineering & Global Delivery",
+                "image_url": os.getenv("LEADERSHIP_KRISHNA_BONAGIRI_URL", "")
+            },
+            {
+                "name": "Balu Kuncham",
+                "title": "Senior Vice President – Strategic Partnerships",
+                "image_url": os.getenv("LEADERSHIP_BALU_KUNCHAM_SENIOR_VICE_PRESIDENT_STRATEGIC_PARTNERSHIPSLD5_URL", "")
+            },
+            {
+                "name": "Balaji Raju Digala",
+                "title": "Delivery Head",
+                "image_url": os.getenv("LEADERSHIP_BALAJI_RAJU_DIGALA_DELIVERY_HEADLD6_URL", "")
+            },
+            {
+                "name": "Manikyam Thukkapuram",
+                "title": "Vice President – Alliances & Engineering",
+                "image_url": os.getenv("LEADERSHIP_MANIKYAM_THUKKAPURAM_VICE_PRESIDENT_ALLIANCES_ENGINEERINGLD7_URL", "")
+            },
+            {
+                "name": "Prakash Nagarajan",
+                "title": "Corporate Vice President – Global, Growth & Strategy",
+                "image_url": os.getenv("LEADERSHIP_PRAKASH_NAGARAJAN_CORPORATE_VICE_PRESIDENT_GLOBAL_GROWTH_STRATEGYLD8_URL", "")
+            },
+            {
+                "name": "Shyam S Mantha",
+                "title": "Senior Vice President – Global Sales & Strategy",
+                "image_url": os.getenv("LEADERSHIP_SHYAM_S_MANTHA_SENIOR_VICE_PRESIDENT_GLOBAL_SALES_STRATEGYLD9_URL", "")
+            },
+            {
+                "name": "Srikanth Babu Oddiraju",
+                "title": "Senior Vice President",
+                "image_url": os.getenv("LEADERSHIP_SRIKANTH_BABU_ODDIRAJU_SENIOR_VICE_PRESIDENTLD10_URL", "")
             },
             {
                 "name": "Raghava Kothamasu",
-                "title": "Chief Financial Officer",
+                "title": "Vice President – Delivery",
                 "image_url": os.getenv("LEADERSHIP_RAGHAVA_KOTHAMASU_URL", "")
             },
             {
                 "name": "Phani Raj Gollapudi",
-                "title": "Vice President of Engineering",
+                "title": "Vice President – Delivery",
                 "image_url": os.getenv("LEADERSHIP_PHANI_RAJ_GOLLAPUDI_URL", "")
             },
             {
-                "name": "Krishna Bonagiri",
-                "title": "Vice President of Sales",
-                "image_url": os.getenv("LEADERSHIP_KRISHNA_BONAGIRI_URL", "")
+                "name": "Gopi Krishna Atmakuri",
+                "title": "Vice President – Delivery",
+                "image_url": os.getenv("LEADERSHIP_GOPI_KRISHNA_ATMAKURI_URL", "")
             },
             {
-                "name": "Gopi Krishna Atmakuri",
-                "title": "Vice President of Human Resources",
-                "image_url": os.getenv("LEADERSHIP_GOPI_KRISHNA_ATMAKURI_URL", "")
+                "name": "Vijay Bhaskar Perumal",
+                "title": "Vice President – Engineering",
+                "image_url": os.getenv("LEADERSHIP_VIJAY_BHASKAR_PERUMAL_URL", "")
+            },
+            {
+                "name": "Ravikumar Nagaraj",
+                "title": "Senior Manager – Projects",
+                "image_url": os.getenv("LEADERSHIP_RAVIKUMAR_NAGARAJ_URL", "")
+            },
+            {
+                "name": "Pranav Damle",
+                "title": "Vice President – Client Services",
+                "image_url": os.getenv("LEADERSHIP_PRANAV_DAMLE_VICE_PRESIDENT_CLIENT_SERVICESLD16_URL", "")
+            },
+            {
+                "name": "Rakesh Dhanamsetty",
+                "title": "Vice President – Practice & Solutions",
+                "image_url": os.getenv("LEADERSHIP_RAKESH_DHANAMSETTY_VICE_PRESIDENT_PRACTICE_SOLUTIONSLD17_URL", "")
+            },
+            {
+                "name": "James Kass",
+                "title": "Vice President – Business Strategy & Delivery",
+                "image_url": os.getenv("LEADERSHIP_JAMES_KASS_VICE_PRESIDENT_BUSINESS_STRATEGY_DELIVERYLD18_URL", "")
+            },
+            {
+                "name": "Ravi Shankar P",
+                "title": "Vice President – Delivery Head",
+                "image_url": os.getenv("LEADERSHIP_RAVI_SHANKAR_P_VICE_PRESIDENT_DELIVERY_HEADLD19_URL", "")
+            },
+            {
+                "name": "Sreeraj Venkitaramanan",
+                "title": "Senior Director – Practice Head",
+                "image_url": os.getenv("LEADERSHIP_SREERAJ_VENKITARAMANAN_SENIOR_DIRECTOR_PRACTICE_HEADLD20_URL", "")
+            },
+            {
+                "name": "Prasad Paluri",
+                "title": "Senior Director – Engineering",
+                "image_url": os.getenv("LEADERSHIP_PRASAD_PALURI_SENIOR_DIRECTOR_ENGINEERINGLD21_URL", "")
+            },
+            {
+                "name": "Sridhar Reddy",
+                "title": "Director – Operations",
+                "image_url": os.getenv("LEADERSHIP_SRIDHAR_REDDY_DIRECTOR_OPERATIONSLD22_URL", "")
+            },
+            {
+                "name": "Prasanth Tammiraju",
+                "title": "Director – Practice & Solutions",
+                "image_url": os.getenv("LEADERSHIP_PRASANTH_TAMMIRAJU_DIRECTOR_PRACTICE_SOLUTIONSLD23_URL", "")
+            },
+            {
+                "name": "Ravi Rajuladevi",
+                "title": "Director – Sales, EMEA",
+                "image_url": os.getenv("LEADERSHIP_RAVI_RAJULADEVI_DIRECTOR_SALES_EMEALD24_URL", "")
+            },
+            {
+                "name": "Richa Sharma",
+                "title": "Director – Account Management",
+                "image_url": os.getenv("LEADERSHIP_RICHA_SHARMA_DIRECTOR_ACCOUNT_MANAGEMENTLD25_URL", "")
+            },
+            {
+                "name": "Raama Krishna",
+                "title": "Director – Recruitment",
+                "image_url": os.getenv("LEADERSHIP_RAAMA_KRISHNA_DIRECTOR_RECRUITMENTLD26_URL", "")
+            },
+            {
+                "name": "Lavina DSilva",
+                "title": "Director – Strategic Client Success",
+                "image_url": os.getenv("LEADERSHIP_LAVINA_DSILVA_DIRECTOR_STRATEGIC_CLIENT_SUCCESSLD27_URL", "")
+            },
+            {
+                "name": "Madhavi Gundavajyala",
+                "title": "Director – Delivery & Client Relations",
+                "image_url": os.getenv("LEADERSHIP_MADHAVI_GUNDAVAJYALA_DIRECTOR_DELIVERY_CLIENT_RELATIONSLD28_URL", "")
+            },
+            {
+                "name": "Siva Prasad Polepally",
+                "title": "Delivery Head – Data & AI",
+                "image_url": os.getenv("LEADERSHIP_SIVA_PRASAD_POLEPALLY_DELIVERY_HEAD_DATA_AILD29_URL", "")
+            },
+            {
+                "name": "Siva Varma Gajarla",
+                "title": "Principal Architect – Azure Data Practice & Solutions",
+                "image_url": os.getenv("LEADERSHIP_SIVA_VARMA_GAJARLA_PRINCIPAL_ARCHITECT_AZURE_DATA_PRACTICE_SOLUTIONSLD30_URL", "")
+            },
+            {
+                "name": "Sandeep Thomas",
+                "title": "Senior Program Manager – Marketing",
+                "image_url": os.getenv("LEADERSHIP_SANDEEP_THOMAS_SENIOR_PROGRAM_MANAGER_MARKETINGLD31_URL", "")
+            },
+            {
+                "name": "Mithun P N",
+                "title": "Senior Program Manager",
+                "image_url": os.getenv("LEADERSHIP_MITHUN_P_N_SENIOR_PROGRAM_MANAGERLD32_URL", "")
+            },
+            {
+                "name": "Siva Sekhar Kanuru",
+                "title": "Senior Program Manager",
+                "image_url": os.getenv("LEADERSHIP_SIVA_SEKHAR_KANURU_SENIOR_PROGRAM_MANAGERLD33_URL", "")
+            },
+            {
+                "name": "Sushma Uliya",
+                "title": "Manager – HR Operations",
+                "image_url": os.getenv("LEADERSHIP_SUSHMA_ULIYA_MANAGER_HR_OPERATIONSLD34_URL", "")
+            },
+            {
+                "name": "Marcela Caceres",
+                "title": "Account Manager",
+                "image_url": os.getenv("LEADERSHIP_MARCELA_CACERES_ACCOUNT_MANAGERLD35_URL", "")
             }
         ]
         logger.info(f"Loaded {len(self.leadership_team)} leadership team members")
@@ -205,8 +364,8 @@ class Agent:
         lines = response.split("\n")
         formatted = []
         in_dos, in_donts = False, False
-        seen_items = set()  # Track unique items to avoid duplicates
-        current_section = None  # Track current section (e.g., Business Formals, Smart Casuals)
+        seen_items = set()
+        current_section = None
         
         for line in lines:
             stripped = line.strip().lower()
@@ -215,39 +374,92 @@ class Agent:
                 formatted.append(f"## {line.strip()}")
                 current_section = None
                 in_dos, in_donts = False, False
+                continue  # Skip adding extra newlines
             # Detect sub-sections
             elif stripped.startswith("business formals") or stripped.startswith("smart casuals") or stripped.startswith("footwear:") or stripped.startswith("hair") or stripped.startswith("jewelry:"):
                 current_section = line.strip()
                 formatted.append(f"### {current_section}")
                 in_dos, in_donts = False, False
+                continue
             # Detect Do's and Don'ts
             elif stripped.startswith("do's:") or stripped.startswith("dos:"):
                 in_dos, in_donts = True, False
                 formatted.append("#### Do's")
+                continue
             elif stripped.startswith("don'ts:") or stripped.startswith("donts:"):
                 in_dos, in_donts = False, True
                 formatted.append("#### Don'ts")
-            # Process list items
+                continue
+            # Process list items - only add spacing for first item
             elif (stripped.startswith("-") or stripped.startswith("*")) and (in_dos or in_donts):
                 item = line[1:].strip()
-                if item and item.lower() not in seen_items:  # Avoid duplicates
-                    # Bold for Do's, unbold for Don'ts
-                    formatted_item = f"  - **{item}**" if in_dos else f"  - {item}"
+                if item and item.lower() not in seen_items:
+                    indent = "  " if len(formatted) > 0 and formatted[-1].startswith("####") else ""
+                    formatted_item = f"{indent}- **{item}**" if in_dos else f"{indent}- {item}"
                     formatted.append(formatted_item)
                     seen_items.add(item.lower())
-            # Preserve other lines (e.g., empty lines or non-list content)
-            else:
+                    continue
+            # Preserve other lines but clean up excessive spacing
+            elif stripped:
+                # Only add non-empty lines, strip trailing whitespace
                 formatted.append(line.rstrip())
                 in_dos, in_donts = False, False
                 current_section = None
         
-        return "\n".join(formatted)
+        # Join with single newlines and clean up excessive empty lines
+        result = "\n".join(formatted)
+        # Replace multiple newlines with single newline, but preserve headers
+        result = re.sub(r'\n{3,}', '\n\n', result)
+        # Ensure single newline after headers
+        result = re.sub(r'(###?\s+.+?)\n{2,}', r'\1\n', result)
+        
+        return result
 
     async def process_query(self, documents: str, history: list, query: str, role: str, intent_data: dict = None) -> Tuple[str, dict | None]:
         try:
             # Null-safety for intent_data: Default to empty dict if None
             intent_data = intent_data or {}
 
+            # Handle special intents FIRST, before LLM call
+            intent = intent_data.get("intent")
+            
+            if intent == "video":
+                # For video intent, don't call LLM - return direct response with media
+                answer = (
+                    "Check out Quadrant Technologies' company video below to see our innovative AI-empowered solutions "
+                    "and commitment to excellence in IT services!\n\n"
+                    "If you have any further questions, feel free to ask!"
+                )
+                media_data = {"type": "video", "url": self.video_url} if self.video_url else None
+                logger.info(f"Video intent processed directly, media_data: {media_data}")
+                return answer, media_data
+                
+            elif intent == "best_employee":
+                answer = "The best employee at Quadrant Technologies is Keerthana, recognized for her outstanding contributions and dedication."
+                media_data = {"type": "image", "url": self.best_employee_image_url} if self.best_employee_image_url else None
+                logger.debug(f"Best employee intent detected, media_data set to: {media_data}")
+                return answer, media_data
+                
+            elif intent == "leadership":
+                # Construct leadership team response in exact order
+                answer = "Here is the leadership team of Quadrant Technologies:\n\n"
+                for member in self.leadership_team:
+                    answer += f"- {member['name']}, {member['title']}\n"
+                answer += "\nIf you have any further questions about the company or its leadership, feel free to ask!"
+                media_data = {
+                    "type": "leadership",
+                    "members": [
+                        {
+                            "name": member["name"],
+                            "title": member["title"],
+                            "url": member["image_url"]
+                        } for member in self.leadership_team if member["image_url"]
+                    ]
+                }
+                logger.debug(f"Leadership intent detected with {len(media_data['members'])} members with images")
+                return answer, media_data
+
+            # For all other intents, build the LLM prompt
             prompt = (
                 "You are an expert assistant analyzing job descriptions and resumes, designed to maintain conversation context like a chat application. "
                 f"You are interacting with a {'HR representative' if role == 'hr' else 'job candidate'}. "
@@ -267,15 +479,9 @@ class Agent:
             prompt += f"\n{role.capitalize()} Query: {query}"
 
             media_data = None
-            intent = intent_data.get("intent")  # Safe now due to null-safety above
             gender = intent_data.get("gender")
 
-            if intent == "video":
-                prompt += "\nIf the query is about videos or company overview, provide a brief introduction to the video and reference that the company video is available for viewing. Structure the response professionally: Start with a short description (e.g., 'This video showcases the AI-empowered solutions of Quadrant Technologies.'), then mention 'You can watch the company video below for more details.' End with 'If you have any further questions, feel free to ask!'"
-                media_data = {"type": "video", "url": self.video_url} if self.video_url else None
-                if not self.video_url:
-                    prompt += "\nNote: If no video URL is available, mention that the video will be provided soon."
-            elif intent == "dress":
+            if intent == "dress":
                 if gender:
                     gender_cap = gender.capitalize()
                     prompt += f"\nIf the query is about dress code for {gender}, structure the response starting with '## For {gender_cap} Employees:' followed by '### Business Formals (Monday–Thursday):', '### Smart Casuals (Friday):', '### Footwear:', '### Hair & Beard:' or '### Hair:', '### Jewelry:' (as applicable) with '#### Do's' and '#### Don'ts' with bullet points for allowed and prohibited categories. Each item must start with a dash (-), be unique, and avoid duplicates. End with 'For more details, you can view the dress code image here. If you have any further questions, feel free to ask!'"
@@ -285,30 +491,8 @@ class Agent:
             elif intent == "president":
                 media_data = {"type": "image", "url": self.president_image_url} if self.president_image_url else None
                 logger.debug(f"President intent detected, media_data set to: {media_data}")
-            elif intent == "best_employee":
-                answer = "The best employee at Quadrant Technologies is Keerthana, recognized for her outstanding contributions and dedication."
-                media_data = {"type": "image", "url": self.best_employee_image_url} if self.best_employee_image_url else None
-                logger.debug(f"Best employee intent detected, media_data set to: {media_data}")
-                return answer, media_data
-            elif intent == "leadership":
-                # Construct leadership team response
-                answer = "Here is the leadership team of Quadrant Technologies:\n\n"
-                for member in self.leadership_team:
-                    answer += f"- {member['name']}, {member['title']}\n"
-                answer += "\nIf you have any further questions about the company or its leadership, feel free to ask!"
-                media_data = {
-                    "type": "leadership",
-                    "members": [
-                        {
-                            "name": member["name"],
-                            "title": member["title"],
-                            "url": member["image_url"]
-                        } for member in self.leadership_team if member["image_url"]
-                    ]
-                }
-                logger.debug(f"Leadership intent detected, media_data set to: {media_data}")
-                return answer, media_data
 
+            # Call LLM for non-special intents
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -445,7 +629,7 @@ class Agent:
                 "For 'nearby' and 'directions'/'distance' with no explicit origin, use Quadrant office as the source address. "
                 "For queries containing 'how far' or 'distance', classify as 'distance' intent. "
                 "If not map-related, classify the intent into one of: "
-                "'video' (queries related to videos, company videos, or any video content), "
+                "'video' (queries related to videos, company videos,ai capabilities,ai empowered solutions or any video content), "
                 "'dress' (queries related to dress code, what to wear, or clothing policies), "
                 "'president' (queries related to the president, company leadership, or president details), "
                 "'best_employee' (queries related to the best employee, employee of the month, or similar), "

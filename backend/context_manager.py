@@ -41,7 +41,7 @@ class ContextManager:
             logger.info(f"Creating session with candidate_name: '{candidate_name}'")
 
             # Personalized initial message
-            initial_message = f"Hey {candidate_name}! QChat is here to assist you with your queries along the way."
+            initial_message = f"Hey {candidate_name}! ASK HR is here to assist you with your queries along the way."
             logger.info(f"Initial message set to: '{initial_message}'")
 
             session_data = {
