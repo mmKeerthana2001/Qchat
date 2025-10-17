@@ -95,7 +95,7 @@ export function ChatInput({ sessionId, addMessage, role, isInitialMessageSent, s
     }
 
     setIsLoading(true)
-    const initialMessage = message.trim() || "QChat is here to assist you with your queries along the way."
+    const initialMessage = message.trim() || "ASK HR is here to assist you with your queries along the way."
 
     try {
       // Send initial message if not already sent
@@ -141,7 +141,7 @@ export function ChatInput({ sessionId, addMessage, role, isInitialMessageSent, s
       const shareLink = linkData.share_link
 
       // Construct email template
-      const subject = "Invitation to QChat"
+      const subject = "Invitation to ASK HR"
       const body = `Hi ${candidateName},\n\n${initialMessage}\n\nAccess the chat here: ${shareLink}\n\nBest regards,\n${hrEmail}`
 
       const mailtoUrl = `mailto:${candidateEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`

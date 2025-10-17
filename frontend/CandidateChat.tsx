@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -5,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "@/components/ui/sonner";
-import { Menu, Send, Loader2, User, MapPin, Star, GripVertical, Mic, MoreHorizontal } from "lucide-react";
+import { Menu, Send, Loader2, User, MapPin, Star, GripVertical, Mic, ChevronLeft, ChevronRight, ChevronsLeftRight } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -21,11 +22,11 @@ import {
 interface MapData {
   type: "address" | "nearby" | "directions" | "multi_location" | "distance";
   data:
-    | string // for address
-    | { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[] // for nearby
-    | string[] // for directions
-    | { city: string; address: string; map_url?: string; static_map_url?: string }[] // for multi_location
-    | { origin: string; destination: string; distance: string; duration: string }; // for distance
+    | string
+    | { name: string; address: string; map_url?: string; static_map_url?: string; rating?: number | string; total_reviews?: number; type?: string; price_level?: string }[]
+    | string[]
+    | { city: string; address: string; map_url?: string; static_map_url?: string }[]
+    | { origin: string; destination: string; distance: string; duration: string };
   map_url?: string;
   static_map_url?: string;
   coordinates?: { lat: number; lng: number; label: string; color?: string }[];
@@ -53,7 +54,7 @@ interface Message {
   audio_base64?: string;
   map_data?: MapData;
   media_data?: MediaData;
-  isTyping?: boolean; // New property for typing indicator
+  isTyping?: boolean;
 }
 
 function CandidateChat() {
@@ -68,7 +69,7 @@ function CandidateChat() {
   const [selectedImage, setSelectedImage] = useState<{ src: string; alt: string } | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [sidebarWidth, setSidebarWidth] = useState(256);
+  const [sidebarWidth, setSidebarWidth] = useState(280);
   const [isResizing, setIsResizing] = useState(false);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const maxReconnectAttempts = 3;
@@ -91,7 +92,7 @@ function CandidateChat() {
     "What is the address of Quadrant Technologies?",
     "Are there any PGs or restaurants near Quadrant Technologies?",
     "Where are all the Quadrant Technologies offices located?",
-    "Show me the company video",
+    "Show me the AI capabilities video",
     "What is the dress code?",
     "Who is the chairman?",
     "Who is on the leadership team?",
@@ -103,8 +104,6 @@ function CandidateChat() {
     const dots = ['⠂', '⠆', '⠒', '⢄', '⡀'];
     return dots[index % dots.length];
   };
-
-  // Replace the existing TypingIndicator component with this simplified version:
 
   const TypingIndicator = ({ messageId }: { messageId: string }) => {
     const [dotIndex, setDotIndex] = useState(0);
@@ -132,7 +131,6 @@ function CandidateChat() {
           </AvatarFallback>
         </Avatar>
         <div className="flex-1 space-y-2">
-          {/* No chat bubble wrapper - just the dots directly */}
           <div className="flex items-center">
             <div className="flex space-x-1">
               {Array.from({ length: 3 }, (_, i) => (
@@ -160,26 +158,27 @@ function CandidateChat() {
   };
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!isSidebarOpen) return;
     setIsResizing(true);
     e.preventDefault();
-  }, []);
+  }, [isSidebarOpen]);
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (!isResizing) return;
+    if (!isResizing || !isSidebarOpen) return;
     const newWidth = e.clientX;
     const minWidth = 200;
-    const maxWidth = 500;
+    const maxWidth = 400;
     if (newWidth >= minWidth && newWidth <= maxWidth) {
       setSidebarWidth(newWidth);
     }
-  }, [isResizing]);
+  }, [isResizing, isSidebarOpen]);
 
   const handleMouseUp = useCallback(() => {
     setIsResizing(false);
   }, []);
 
   useEffect(() => {
-    if (isResizing) {
+    if (isResizing && isSidebarOpen) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = 'col-resize';
@@ -191,7 +190,14 @@ function CandidateChat() {
         document.body.style.userSelect = '';
       };
     }
-  }, [isResizing, handleMouseMove, handleMouseUp]);
+  }, [isResizing, isSidebarOpen, handleMouseMove, handleMouseUp]);
+
+  const toggleSidebar = () => {
+    setIsSidebarOpen(!isSidebarOpen);
+    if (!isSidebarOpen) {
+      setSidebarWidth(280); // Reset to default width when expanding
+    }
+  };
 
   useEffect(() => {
     const loadGoogleMapsScript = () => {
@@ -370,7 +376,6 @@ function CandidateChat() {
 
         console.log("Received WebSocket data:", data);
 
-        // Remove typing indicator when real message arrives
         setMessages(prev => prev.filter(msg => !msg.isTyping));
 
         const newMessage: Message = {
@@ -493,7 +498,7 @@ function CandidateChat() {
               media_data: msg.media_data ? {
                 type: msg.media_data.type,
                 url: msg.media_data.url,
-                members: msg.media_data.members ? data.media_data.members.map((member: any) => ({
+                members: msg.media_data.members ? msg.media_data.members.map((member: any) => ({
                   name: member.name,
                   title: member.title,
                   url: member.url
@@ -548,10 +553,8 @@ function CandidateChat() {
         timestamp: new Date(),
       };
       
-      // Add candidate message
       setMessages(prev => [...prev, candidateMessage]);
 
-      // Add typing indicator immediately after user message
       const typingMessage: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -575,7 +578,6 @@ function CandidateChat() {
       const data = await response.json();
       console.log("HTTP response data:", data);
 
-      // Remove typing indicator
       setMessages(prev => prev.filter(msg => !msg.isTyping));
 
       const assistantMessage: Message = {
@@ -619,7 +621,6 @@ function CandidateChat() {
       if (textareaRef.current) textareaRef.current.style.height = "auto";
     } catch (error) {
       console.error("Error sending message:", error);
-      // Remove both candidate message and typing indicator on error
       setMessages(prev => 
         prev.filter(msg => 
           !(msg.role === "candidate" && msg.content === finalMessage) && 
@@ -665,12 +666,13 @@ function CandidateChat() {
     navigate(`/voice-interaction?sessionId=${sessionId}&token=${token}`);
   };
 
-  const toggleSidebar = () => {
-    setIsSidebarOpen(!isSidebarOpen);
-  };
-
+  // Updated formatTime function to include date and time
   const formatTime = (date: Date) => {
     return new Intl.DateTimeFormat('en-US', {
+      weekday: 'short',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
       hour: 'numeric',
       minute: '2-digit',
       hour12: true
@@ -990,52 +992,82 @@ function CandidateChat() {
       );
     } else if (mediaData.type === "leadership") {
       return (
-        <div className="mt-2 p-2 bg-muted rounded-xl shadow-sm border border-border">
-          <div className="flex items-center gap-2 mb-2">
+        <div className="mt-4 p-4 bg-muted rounded-xl shadow-sm border border-border">
+          <div className="flex items-center gap-2 mb-4">
             <User className="h-5 w-5 text-primary" />
-            <span className="font-semibold text-sm text-foreground">Leadership Team</span>
+            <span className="font-semibold text-base text-foreground">Leadership Team</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {mediaData.members?.map((member, index) => (
-              <div key={index} className="flex items-start gap-3">
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <img
-                      src={member.url}
-                      alt={`${member.name}'s Photo`}
-                      className="w-16 h-16 object-cover rounded-full cursor-pointer hover:opacity-80 transition-opacity"
-                      onClick={() => handleImageClick(member.url, `${member.name}'s Photo`)}
-                      onError={() => {
-                        console.error(`Failed to load leadership image: ${member.url}`);
-                        toast.error(`Failed to load image for ${member.name}`, { duration: 5000 });
-                      }}
-                    />
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-md bg-card border border-border rounded-lg shadow-lg">
-                    <DialogHeader>
-                      <DialogTitle className="text-lg font-semibold text-foreground">{member.name}</DialogTitle>
-                    </DialogHeader>
-                    <div className="flex flex-col items-center p-4">
-                      <img
-                        src={member.url}
-                        alt={`${member.name}'s Photo`}
-                        className="w-48 h-48 object-cover rounded-md mb-2"
-                        onError={() => {
-                          console.error(`Failed to load dialog image: ${member.url}`);
-                          toast.error(`Failed to load image for ${member.name}`, { duration: 5000 });
-                        }}
-                      />
-                      <p className="text-sm font-medium text-foreground">{member.title}</p>
+          <div className="space-y-4">
+            {mediaData.members && mediaData.members.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {mediaData.members.map((member, index) => (
+                  <div 
+                    key={index} 
+                    className="group flex flex-col items-center p-3 bg-card rounded-lg border border-border hover:shadow-md hover:border-primary/50 transition-all duration-200"
+                  >
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <div className="relative">
+                          <img
+                            src={member.url}
+                            alt={`${member.name}'s Photo`}
+                            className="w-20 h-20 object-cover rounded-full cursor-pointer hover:opacity-90 transition-opacity group-hover:ring-2 group-hover:ring-primary/30"
+                            onClick={() => handleImageClick(member.url, `${member.name}'s Photo`)}
+                            onError={(e) => {
+                              console.error(`Failed to load leadership image: ${member.url}`);
+                              (e.target as HTMLImageElement).src = '/assets/favicon.ico';
+                              toast.error(`Failed to load image for ${member.name}`, { duration: 3000 });
+                            }}
+                          />
+                          <div className="absolute inset-0 rounded-full bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </div>
+                      </DialogTrigger>
+                      <DialogContent className="sm:max-w-md bg-card border border-border rounded-lg shadow-lg max-w-sm">
+                        <DialogHeader>
+                          <DialogTitle className="text-lg font-semibold text-foreground">{member.name}</DialogTitle>
+                        </DialogHeader>
+                        <div className="flex flex-col items-center p-4 space-y-3">
+                          <img
+                            src={member.url}
+                            alt={`${member.name}'s Photo`}
+                            className="w-32 h-32 object-cover rounded-full ring-2 ring-primary/20"
+                            onError={(e) => {
+                              console.error(`Failed to load dialog image: ${member.url}`);
+                              (e.target as HTMLImageElement).src = '/assets/favicon.ico';
+                            }}
+                          />
+                          <div className="text-center">
+                            <p className="text-sm font-medium text-foreground">{member.name}</p>
+                            <p className="text-xs text-muted-foreground max-w-[200px] line-clamp-2">{member.title}</p>
+                          </div>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+                    <div className="mt-3 text-center space-y-1">
+                      <p className="text-sm font-semibold text-foreground line-clamp-1">{member.name}</p>
+                      <p 
+                        className="text-xs text-muted-foreground line-clamp-2 max-w-[140px] leading-tight"
+                        title={member.title}
+                      >
+                        {member.title}
+                      </p>
                     </div>
-                  </DialogContent>
-                </Dialog>
-                <div>
-                  <p className="text-sm font-medium text-foreground">{member.name}</p>
-                  <p className="text-sm text-muted-foreground">{member.title}</p>
-                </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-4">
+                Leadership team images are not available at the moment.
+              </p>
+            )}
           </div>
+          {mediaData.members && mediaData.members.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-border">
+              <p className="text-xs text-muted-foreground text-center">
+                Click on any photo to view full profile
+              </p>
+            </div>
+          )}
         </div>
       );
     }
@@ -1048,7 +1080,6 @@ function CandidateChat() {
     setIsDialogOpen(true);
   };
 
-  // Render messages with typing indicator support
   const renderMessage = (message: Message) => {
     if (message.isTyping) {
       return <TypingIndicator messageId={message.id} />;
@@ -1189,29 +1220,42 @@ function CandidateChat() {
     return null;
   };
 
+  // Calculate sidebar width for main content margin
+  const sidebarWidthPx = isSidebarOpen ? sidebarWidth : 0;
+  const sidebarClasses = `fixed inset-y-0 left-0 bg-card/50 backdrop-blur-xl border-r border-border flex flex-col transition-all duration-300 ease-in-out z-40 ${
+    isSidebarOpen ? 'translate-x-0 w-[${sidebarWidth}px]' : 'w-0 -translate-x-full'
+  }`;
+
   return (
-    <>
-      
-      
-      <div className="flex h-screen w-full flex-row">
-        <div
-          ref={sidebarRef}
-          className={`fixed inset-y-0 left-0 bg-card/50 backdrop-blur-xl border-r border-border flex flex-col transition-transform duration-300 ease-in-out z-10 ${
-            isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
-          } md:relative md:translate-x-0`}
-          style={{ width: isSidebarOpen ? `${sidebarWidth}px` : '0px' }}
-        >
-          <div className="flex items-center justify-between p-4 border-b border-border">
-            <h4 className="text-sm font-medium text-foreground truncate">Suggested Questions</h4>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="md:hidden flex-shrink-0"
-              onClick={toggleSidebar}
-            >
-              <Menu className="h-5 w-5" />
-            </Button>
-          </div>
+    <div className="flex h-screen w-full flex-row overflow-hidden">
+      {/* Sidebar */}
+      <div 
+        ref={sidebarRef}
+        className={sidebarClasses}
+        style={{ width: isSidebarOpen ? `${sidebarWidth}px` : '0px' }}
+      >
+        {/* Sidebar Header with single toggle button */}
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <h4 className="text-sm font-medium text-foreground truncate">
+            {isSidebarOpen ? "Suggested Questions" : ""}
+          </h4>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 p-0 flex-shrink-0 hover:bg-muted/50 transition-colors"
+            onClick={toggleSidebar}
+            title={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+          >
+            {isSidebarOpen ? (
+              <ChevronLeft className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+          </Button>
+        </div>
+
+        {/* Sidebar Content - only visible when expanded */}
+        {isSidebarOpen && (
           <div className="flex-1 overflow-hidden">
             <ScrollArea className="h-full">
               <div className="p-4 space-y-2">
@@ -1230,48 +1274,63 @@ function CandidateChat() {
               </div>
             </ScrollArea>
           </div>
+        )}
+
+        {/* Resize handle - only visible when expanded */}
+        {isSidebarOpen && (
           <div
             ref={resizeHandleRef}
-            className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors group ${
-              isResizing ? 'bg-primary/40' : ''
-            }`}
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-border hover:bg-primary/30 transition-colors z-50 group"
             onMouseDown={handleMouseDown}
           >
-            <div className="absolute top-1/2 right-0 transform -translate-y-1/2 translate-x-1/2">
-              <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                <GripVertical className="h-4 w-4 text-muted-foreground" />
-              </div>
+            <div className="absolute top-1/2 right-0 transform -translate-y-1/2 translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <ChevronsLeftRight className="h-3 w-3 text-muted-foreground" />
             </div>
           </div>
-        </div>
+        )}
+      </div>
 
-        <div className="flex flex-col flex-1" style={{ marginLeft: isSidebarOpen ? 0 : 0 }}>
-          <header className="border-b border-border bg-card/50 backdrop-blur-xl p-4">
-            <div className="max-w-4xl mx-auto flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="md:hidden"
-                  onClick={toggleSidebar}
-                >
-                  <Menu className="h-5 w-5" />
-                </Button>
-                <h1 className="text-lg font-semibold text-foreground">Candidate Chat</h1>
-              </div>
+      {/* Main Chat Content */}
+      <div 
+        className="flex flex-col flex-1 transition-all duration-300 ease-in-out"
+        style={{ 
+          marginLeft: isSidebarOpen ? `${sidebarWidth}px` : '0px',
+          width: isSidebarOpen ? `calc(100vw - ${sidebarWidth}px)` : '100vw'
+        }}
+      >
+        {/* Header */}
+        <header className="border-b border-border bg-card/50 backdrop-blur-xl p-4 sticky top-0 z-30">
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-2">
               <Button
-                variant="default"
-                onClick={handleVoiceMode}
-                className="flex items-center gap-2"
-                disabled={isLoading}
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 p-0 md:hidden"
+                onClick={toggleSidebar}
               >
-                <Mic className="h-4 w-4" />
-                <span className="hidden sm:inline">ASK ME</span>
+                {isSidebarOpen ? (
+                  <ChevronLeft className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
               </Button>
+              <h1 className="text-lg font-semibold text-foreground">Candidate Chat</h1>
             </div>
-          </header>
+            <Button
+              variant="default"
+              onClick={handleVoiceMode}
+              className="flex items-center gap-2"
+              disabled={isLoading}
+            >
+              <Mic className="h-4 w-4" />
+              <span className="hidden sm:inline">ASK ME</span>
+            </Button>
+          </div>
+        </header>
 
-          <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
+        {/* Messages Area */}
+        <ScrollArea className="flex-1" ref={scrollAreaRef}>
+          <div className={`p-4 ${isSidebarOpen ? 'md:pr-4' : 'pr-4'}`}>
             <div className="max-w-4xl mx-auto space-y-4">
               {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-96 text-center">
@@ -1286,7 +1345,7 @@ function CandidateChat() {
                       }}
                     />
                   </div>
-                  <h3 className="text-lg font-semibold mb-2 text-foreground">Welcome to QChat</h3>
+                  <h3 className="text-lg font-semibold mb-2 text-foreground">Welcome to ASK HR</h3>
                   <p className="text-sm text-muted-foreground">Ask about your application or location details</p>
                 </div>
               ) : (
@@ -1297,40 +1356,41 @@ function CandidateChat() {
                 ))
               )}
             </div>
-          </ScrollArea>
+          </div>
+        </ScrollArea>
 
-          <div className="border-t border-border bg-card/50 backdrop-blur-xl p-4">
-            <div className="max-w-4xl mx-auto">
-              <form onSubmit={handleSubmit} className="flex items-end gap-2">
-                <div className="flex-1">
-                  <Textarea
-                    ref={textareaRef}
-                    value={message}
-                    onChange={handleTextareaChange}
-                    onKeyDown={handleKeyDown}
-                    placeholder={isLoading ? "Processing..." : "Type your message..."}
-                    className="min-h-[40px] max-h-[200px] resize-none"
-                    disabled={isLoading}
-                  />
-                </div>
-                <Button
-                  type="submit"
-                  size="icon"
-                  disabled={isLoading || !message.trim()}
-                  className={isLoading ? "animate-pulse" : ""}
-                >
-                  {isLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4" />
-                  )}
-                </Button>
-              </form>
-            </div>
+        {/* Input Area */}
+        <div className="border-t border-border bg-card/50 backdrop-blur-xl p-4">
+          <div className="max-w-4xl mx-auto">
+            <form onSubmit={handleSubmit} className="flex items-end gap-2">
+              <div className="flex-1">
+                <Textarea
+                  ref={textareaRef}
+                  value={message}
+                  onChange={handleTextareaChange}
+                  onKeyDown={handleKeyDown}
+                  placeholder={isLoading ? "Processing..." : "Type your message..."}
+                  className="min-h-[40px] max-h-[200px] resize-none"
+                  disabled={isLoading}
+                />
+              </div>
+              <Button
+                type="submit"
+                size="icon"
+                disabled={isLoading || !message.trim()}
+                className={isLoading ? "animate-pulse" : ""}
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+              </Button>
+            </form>
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 

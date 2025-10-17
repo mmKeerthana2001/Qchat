@@ -9,6 +9,8 @@ import Index from "./pages/Index";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 import CandidateChat from "./components/layout/CandidateChat"; // Adjust path if needed
+import VoiceInteraction from './components/layout/VoiceInteraction';
+
 
 const queryClient = new QueryClient();
 
@@ -41,7 +43,7 @@ const App = () => (
               }
             />
             <Route path="/candidate-chat" element={<CandidateChat />} />
-            <Route path="*" element={<NotFound />} />
+            <Route path="/voice-interaction" element={<VoiceInteraction />} />
           </Routes>
         </BrowserRouter>
       </TooltipProvider>

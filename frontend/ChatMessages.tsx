@@ -489,6 +489,59 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
     return content;
   };
 
+  const markdownComponents = {
+    h1: ({ node, ...props }: any) => <h1 className="text-xl font-bold mt-2 mb-1 text-foreground" {...props} />,
+    h2: ({ node, ...props }: any) => <h2 className="text-lg font-semibold mt-1.5 mb-1 text-foreground" {...props} />,
+    h3: ({ node, ...props }: any) => <h3 className="text-base font-medium mt-1 mb-0.5 text-foreground" {...props} />,
+    p: ({ node, ...props }: any) => <p className="text-sm mb-1 text-foreground" {...props} />,
+    ul: ({ node, ...props }: any) => <ul className="list-disc pl-4 mb-1 text-sm text-foreground" {...props} />,
+    ol: ({ node, ...props }: any) => <ol className="list-decimal pl-4 mb-1 text-sm text-foreground" {...props} />,
+    li: ({ node, ...props }: any) => <li className="mb-0.5 text-foreground flex items-start gap-0.5" {...props} />,
+    strong: ({ node, ...props }: any) => <strong className="font-semibold text-foreground" {...props} />,
+    em: ({ node, ...props }: any) => <em className="italic text-foreground" {...props} />,
+    a: ({ node, ...props }: any) => <a className="text-primary underline hover:text-primary/80 transition-colors duration-150" target="_blank" rel="noopener noreferrer" {...props} />,
+    code: ({ node, ...props }: any) => <code className="bg-muted px-0.5 py-0.2 rounded text-sm text-foreground" {...props} />,
+    pre: ({ node, ...props }: any) => <pre className="bg-muted p-1 rounded-sm overflow-x-auto text-sm text-foreground" {...props} />,
+    img: ({ node, ...props }: any) => (
+      <Dialog open={isDialogOpen && selectedImage?.src === props.src} onOpenChange={(open) => {
+        setIsDialogOpen(open);
+        if (!open) setSelectedImage(null);
+      }}>
+        <DialogTrigger asChild>
+          <img
+            {...props}
+            className="inline-block w-4 h-4 object-cover rounded-sm ml-0.5 cursor-pointer hover:opacity-80 transition-opacity duration-150"
+            onClick={() => handleImageClick(props.src || '', props.alt || '')}
+            onError={() => {
+              console.error(`Failed to load inline image: ${props.src}`);
+              toast.error(`Failed to load image: ${props.alt || 'Image'}`, { duration: 5000 });
+            }}
+          />
+        </DialogTrigger>
+        <DialogContent className="sm:max-w-xs bg-card border border-border rounded-sm shadow-sm transition-all duration-150">
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold text-foreground">{selectedImage?.alt || 'Image'}</DialogTitle>
+          </DialogHeader>
+          <div className="flex justify-center p-1">
+            {selectedImage?.src ? (
+              <img
+                src={selectedImage.src}
+                alt={selectedImage.alt || 'Image'}
+                className="w-32 h-32 object-contain rounded-sm"
+                onError={() => {
+                  console.error(`Failed to load dialog image: ${selectedImage.src}`);
+                  toast.error(`Failed to load image: ${selectedImage.alt || 'Image'}`, { duration: 5000 });
+                }}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">No image available</p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    ),
+  };
+
   return (
     <ScrollArea className="h-full px-2 py-3">
       <div className="max-w-4xl mx-auto space-y-3">
@@ -497,7 +550,7 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
             <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mb-2 animate-pulse">
               <Sparkles className="h-6 w-6 text-white" />
             </div>
-            <h3 className="text-base font-semibold mb-1 text-foreground">Welcome to QChat</h3>
+            <h3 className="text-base font-semibold mb-1 text-foreground">Welcome to ASK HR</h3>
             <p className="text-sm text-muted-foreground">{role === "candidate" ? "Ask about job opportunities, interview details, or even office locations!" : "Start a conversation or upload a document to get started."}</p>
             {role === "candidate" && (
               <div className="mt-2 space-y-1 w-full max-w-md">
@@ -522,9 +575,9 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
               {(message.role === "hr" || message.role === "candidate") ? (
                 <div className={`flex ${message.role === role ? "justify-end" : "justify-start"} gap-1 mb-3`}>
                   <div className="flex flex-col items-end max-w-[70%]">
-                    <div className={`chat-bubble-${message.role} rounded-lg ${message.role === role ? "rounded-tr-sm" : "rounded-tl-sm"} px-2 py-1 mb-1 bg-gradient-to-r from-blue-500 to-purple-600 text-primary-foreground shadow-sm transition-all duration-150 hover:shadow-md`}>
-                      <span className="text-sm font-semibold text-primary-foreground/80">{message.role.toUpperCase()}</span>
-                      <p className="text-sm leading-normal whitespace-pre-wrap">{message.content}</p>
+                    <div className={`chat-bubble-${message.role} rounded-lg ${message.role === role ? "rounded-tr-sm" : "rounded-tl-sm"} px-2 py-1 mb-1 border hover:bg-accent text-foreground shadow-sm transition-all duration-150 hover:shadow-md border-border`}>
+                      <span className="text-sm font-semibold text-foreground/80">{message.role.toUpperCase()}</span>
+                      <p className="text-sm leading-normal whitespace-pre-wrap text-foreground">{message.content}</p>
                     </div>
                     <span className="text-sm text-muted-foreground">
                       {formatTime(message.timestamp)}
@@ -546,65 +599,15 @@ export function ChatMessages({ thinkDeepMode, messages, isVoiceMode, isRecording
                   <div className="flex-1 space-y-1">
                     <div className="chat-bubble-ai rounded-lg rounded-tl-sm px-2 py-1 bg-card shadow-sm border border-border transition-all duration-150 hover:shadow-md">
                       <div className="prose prose-sm max-w-none">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          rehypePlugins={[rehypeRaw]}
-                          className="text-sm leading-normal whitespace-pre-wrap text-foreground"
-                          components={{
-                            h1: ({ node, ...props }) => <h1 className="text-xl font-bold mt-2 mb-1 text-foreground" {...props} />,
-                            h2: ({ node, ...props }) => <h2 className="text-lg font-semibold mt-1.5 mb-1 text-foreground" {...props} />,
-                            h3: ({ node, ...props }) => <h3 className="text-base font-medium mt-1 mb-0.5 text-foreground" {...props} />,
-                            p: ({ node, ...props }) => <p className="text-sm mb-1 text-foreground" {...props} />,
-                            ul: ({ node, ...props }) => <ul className="list-disc pl-4 mb-1 text-sm text-foreground" {...props} />,
-                            ol: ({ node, ...props }) => <ol className="list-decimal pl-4 mb-1 text-sm text-foreground" {...props} />,
-                            li: ({ node, ...props }) => <li className="mb-0.5 text-foreground flex items-start gap-0.5" {...props} />,
-                            strong: ({ node, ...props }) => <strong className="font-semibold text-foreground" {...props} />,
-                            em: ({ node, ...props }) => <em className="italic text-foreground" {...props} />,
-                            a: ({ node, ...props }) => <a className="text-primary underline hover:text-primary/80 transition-colors duration-150" target="_blank" rel="noopener noreferrer" {...props} />,
-                            code: ({ node, ...props }) => <code className="bg-muted px-0.5 py-0.2 rounded text-sm text-foreground" {...props} />,
-                            pre: ({ node, ...props }) => <pre className="bg-muted p-1 rounded-sm overflow-x-auto text-sm text-foreground" {...props} />,
-                            img: ({ node, ...props }) => (
-                              <Dialog open={isDialogOpen && selectedImage?.src === props.src} onOpenChange={(open) => {
-                                setIsDialogOpen(open);
-                                if (!open) setSelectedImage(null);
-                              }}>
-                                <DialogTrigger asChild>
-                                  <img
-                                    {...props}
-                                    className="inline-block w-4 h-4 object-cover rounded-sm ml-0.5 cursor-pointer hover:opacity-80 transition-opacity duration-150"
-                                    onClick={() => handleImageClick(props.src || '', props.alt || '')}
-                                    onError={() => {
-                                      console.error(`Failed to load inline image: ${props.src}`);
-                                      toast.error(`Failed to load image: ${props.alt || 'Image'}`, { duration: 5000 });
-                                    }}
-                                  />
-                                </DialogTrigger>
-                                <DialogContent className="sm:max-w-xs bg-card border border-border rounded-sm shadow-sm transition-all duration-150">
-                                  <DialogHeader>
-                                    <DialogTitle className="text-base font-semibold text-foreground">{selectedImage?.alt || 'Image'}</DialogTitle>
-                                  </DialogHeader>
-                                  <div className="flex justify-center p-1">
-                                    {selectedImage?.src ? (
-                                      <img
-                                        src={selectedImage.src}
-                                        alt={selectedImage.alt || 'Image'}
-                                        className="w-32 h-32 object-contain rounded-sm"
-                                        onError={() => {
-                                          console.error(`Failed to load dialog image: ${selectedImage.src}`);
-                                          toast.error(`Failed to load image: ${selectedImage.alt || 'Image'}`, { duration: 5000 });
-                                        }}
-                                      />
-                                    ) : (
-                                      <p className="text-sm text-muted-foreground">No image available</p>
-                                    )}
-                                  </div>
-                                </DialogContent>
-                              </Dialog>
-                            ),
-                          }}
-                        >
-                          {DOMPurify.sanitize(preprocessJobDescription(message.content))}
-                        </ReactMarkdown>
+                        <div className="text-sm leading-normal whitespace-pre-wrap text-foreground">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            rehypePlugins={[rehypeRaw]}
+                            components={markdownComponents}
+                          >
+                            {DOMPurify.sanitize(preprocessJobDescription(message.content))}
+                          </ReactMarkdown>
+                        </div>
                         {message.audio_base64 && (
                           <audio controls src={`data:audio/mp3;base64,${message.audio_base64}`} className="mt-1 w-full rounded-sm" />
                         )}
